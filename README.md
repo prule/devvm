@@ -8,7 +8,7 @@ Replaces the per-project `.devcontainer/` setup. Rationale and trade-offs:
 ```
 macOS host (thin)                    Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Claude Code desktop app ──SSH──► ├── ~/projects/…        all repos live here
-├── Browser → localhost:5173         ├── Node 26.7.0, pnpm 12.4.2, OpenSpec, Temurin 21
+├── Browser → localhost:5173         ├── Node 26.7.0, pnpm 12.4.2, OpenSpec, Temurin 25 (+21)
 ├── Xcode / iOS Simulator            ├── Docker Engine → supabase-local-platform
 └── Time Machine (excl. ~/.lima)     └── ~/.claude, ~/.config/gh — one login, once
 ```
@@ -37,6 +37,10 @@ Verify:
 limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; java -version; docker run --rm hello-world'
 ```
 
+`java -version` must report **25**. Two JDKs are installed and Debian
+alternatives prefer the highest available, so this is worth actually reading
+rather than glancing at.
+
 ## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
@@ -47,7 +51,7 @@ Nothing in the VM is backed up. Everything that matters is in git and pushed.
 
 ## Bumping the toolchain
 
-Edit `env:` in `dev.yaml`, then:
+Edit `param:` in `dev.yaml`, then:
 
 ```bash
 limactl stop dev && limactl delete dev && ./bootstrap.sh
@@ -57,6 +61,8 @@ This bumps all ~40 projects at once. That is the intent, and also the risk — i
 
 ## Gotchas
 
+- **Java is the exception to "one version".** `JAVA_VERSIONS: "25 21"` — 25 is the default, 21 is present because several `laptime-insights` modules pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail. Drop 21 once nothing asks for it.
+- **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
 - **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
 - **No host mounts, on purpose.** `mounts: []`. Moving files: `limactl copy`, or git. Adding a host mount would hand the agent a path back to `~/Documents` and undo the isolation.

@@ -79,12 +79,25 @@ portForwards:
 # --- Pinned versions ----------------------------------------------------------
 # One set for every project. Bumping these bumps all ~40 repos at once; that is
 # the point, and it is also the risk. Bump deliberately.
-env:
+#
+# `param:`, NOT `env:`. They look interchangeable and are not: `env:` sets the
+# guest's LOGIN environment, and provision scripts never see it — under
+# `set -u` every reference below would abort the provision as an unbound
+# variable. `param:` is the one that reaches provision scripts and probes,
+# exposed there as $PARAM_<Key>.
+param:
   NODE_VERSION: "26.7.0"
   PNPM_VERSION: "12.4.2"
   OPENSPEC_VERSION: "1.9.0"
   SUPABASE_CLI_VERSION: "2.115.0"
-  JAVA_VERSION: "21"
+  # Java is the one place "one version for everything" doesn't hold. Gradle
+  # toolchains are a declared per-project requirement, not a preference: the
+  # laptime-insights modules pin jvmToolchain(21), and with only 25 present
+  # Gradle either auto-provisions a JDK mid-build or fails outright. Temurin
+  # co-installs cleanly from apt, so both are here and 25 is the default.
+  # Drop 21 from this list once nothing asks for it.
+  JAVA_VERSIONS: "25 21"
+  JAVA_DEFAULT: "25"
 
 provision:
   # ---------------------------------------------------------------------------
@@ -110,7 +123,7 @@ provision:
       # Temurin specifically, not openjdk: matches what CI's actions/setup-java
       # uses. Needed for the Serenity BDD report generator CLI, which
       # @serenity-js/serenity-bdd invokes — it ships its own jar but still needs
-      # `java` on PATH.
+      # `java` on PATH — and for the Kotlin/Gradle projects.
       # GONE: the devcontainer java Feature, and with it the `jdkDistro: tem`
       # workaround (the Feature's version regex couldn't parse Microsoft's
       # `21.0.12+1-ms` identifiers, so a bare "version": "21" failed the build).
@@ -131,9 +144,26 @@ provision:
         > /etc/apt/sources.list.d/docker.list
 
       apt-get update
+
+      jdk_pkgs=()
+      for v in ${PARAM_JAVA_VERSIONS}; do jdk_pkgs+=("temurin-${v}-jdk"); done
       apt-get install -y --no-install-recommends \
-        "temurin-${JAVA_VERSION}-jdk" \
+        "${jdk_pkgs[@]}" \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      # Default JDK. The Temurin debs register alternatives at every priority,
+      # so without pinning, `java` resolves to the HIGHEST version installed —
+      # which happens to be right today and would silently become wrong the
+      # moment a newer JDK is added to JAVA_VERSIONS for some project's
+      # toolchain. Pin it explicitly.
+      JAVA_HOME_DEFAULT="/usr/lib/jvm/temurin-${PARAM_JAVA_DEFAULT}-jdk-arm64"
+      [ -d "$JAVA_HOME_DEFAULT" ] || { echo "no such JDK: $JAVA_HOME_DEFAULT"; exit 1; }
+      for tool in java javac jar javadoc jshell; do
+        [ -x "$JAVA_HOME_DEFAULT/bin/$tool" ] \
+          && update-alternatives --set "$tool" "$JAVA_HOME_DEFAULT/bin/$tool" || true
+      done
+      # Gradle finds the non-default JDKs here without auto-provisioning.
+      echo "JAVA_HOME=$JAVA_HOME_DEFAULT" >> /etc/environment
 
       usermod -aG docker "${LIMA_CIDATA_USER}"
       systemctl enable --now docker
@@ -142,10 +172,10 @@ provision:
       # Static binary, not a global npm install (which Supabase deprecates).
       # Ported from post-create.sh step 3, but installed ONCE for the machine
       # instead of once per container.
-      if [ "$(supabase --version 2>/dev/null || echo none)" != "${SUPABASE_CLI_VERSION}" ]; then
+      if [ "$(supabase --version 2>/dev/null || echo none)" != "${PARAM_SUPABASE_CLI_VERSION}" ]; then
         tmp="$(mktemp -d)"
         curl -fsSL -o "$tmp/supabase.tar.gz" \
-          "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_linux_arm64.tar.gz"
+          "https://github.com/supabase/cli/releases/download/v${PARAM_SUPABASE_CLI_VERSION}/supabase_${PARAM_SUPABASE_CLI_VERSION}_linux_arm64.tar.gz"
         tar -xzf "$tmp/supabase.tar.gz" -C "$tmp" supabase
         install -m 0755 "$tmp/supabase" /usr/local/bin/supabase
         rm -rf "$tmp"
@@ -182,8 +212,8 @@ provision:
       if [ ! -x "$FNM_DIR/fnm" ]; then
         curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell
       fi
-      "$FNM_DIR/fnm" install "${NODE_VERSION}"
-      "$FNM_DIR/fnm" default "${NODE_VERSION}"
+      "$FNM_DIR/fnm" install "${PARAM_NODE_VERSION}"
+      "$FNM_DIR/fnm" default "${PARAM_NODE_VERSION}"
       eval "$("$FNM_DIR/fnm" env)"
 
       # --- pnpm, standalone ---------------------------------------------------
@@ -191,16 +221,16 @@ provision:
       # lose it. pnpm v10+ self-manages each repo's `packageManager` field, so
       # this single binary transparently serves repos still pinned anywhere from
       # 11.5.2 to 12.4.2 — the pins can be normalised later, at leisure.
-      if [ "$(pnpm --version 2>/dev/null || echo none)" != "${PNPM_VERSION}" ]; then
+      if [ "$(pnpm --version 2>/dev/null || echo none)" != "${PARAM_PNPM_VERSION}" ]; then
         curl -fsSL https://get.pnpm.io/install.sh \
-          | env PNPM_VERSION="${PNPM_VERSION}" SHELL=/bin/bash sh -
+          | env PNPM_VERSION="${PARAM_PNPM_VERSION}" SHELL=/bin/bash sh -
       fi
 
       # --- OpenSpec CLI -------------------------------------------------------
       # npm, not pnpm: drops the binary into the fnm Node's bin, already on PATH.
       # A machine dev tool, not an app dependency. Use the SCOPED package — the
       # bare `openspec` on npm is an empty placeholder.
-      npm install -g "@fission-ai/openspec@${OPENSPEC_VERSION}"
+      npm install -g "@fission-ai/openspec@${PARAM_OPENSPEC_VERSION}"
 
       # --- Shell wiring -------------------------------------------------------
       # bash AND zsh, same as the Dockerfile did. Built with echo rather than a
@@ -232,6 +262,7 @@ provision:
             echo 'export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"'
             echo 'eval "$(fnm env)"'
             echo 'export OPENSPEC_TELEMETRY=0'
+            echo "export JAVA_HOME=/usr/lib/jvm/temurin-${PARAM_JAVA_DEFAULT}-jdk-arm64"
           } >> "$rc"
         fi
       done
@@ -263,6 +294,9 @@ probes:
       set -eux -o pipefail
       timeout 300s bash -c 'until [ -x "$HOME/.fnm/fnm" ]; do sleep 3; done'
       timeout 300s bash -c 'until command -v docker >/dev/null; do sleep 3; done'
+      # Assert the DEFAULT jdk, not merely that some java exists: two JDKs are
+      # installed and alternatives silently prefer the highest.
+      java -version 2>&1 | grep -q "\"${PARAM_JAVA_DEFAULT}\\." 
     hint: "Toolchain did not provision. Check: limactl shell dev -- sudo journalctl -u cloud-final"
 
 message: |
