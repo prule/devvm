@@ -1,0 +1,276 @@
+# Lima config for the single dev VM.
+#
+# Replaces every .devcontainer/ in ~/projects. This file plus README.md is the
+# whole environment — if something is installed in the VM and NOT in here, that
+# is a bug in this file, not a fact about the VM. There are no snapshots
+# (see README "Recovery"), so reprovisioning is the only recovery path and it
+# must stay complete.
+#
+#   limactl start ~/projects/current/devvm/dev.yaml --name=dev
+#
+# Translated from homefleet/.devcontainer/{Dockerfile,post-create.sh}. Steps
+# that existed only to work around container boundaries were dropped, not
+# ported — each one is marked "GONE:" below so the omission is deliberate and
+# reviewable rather than an oversight.
+
+# --- Machine ------------------------------------------------------------------
+# vz = Apple's Virtualization.framework (native, fast). Trade-off: `limactl
+# snapshot` is QEMU-only, so this VM has no snapshots. Accepted — see README.
+vmType: vz
+
+# Rosetta binfmt so x86-only Docker images still run. This M2 has no nested
+# virtualisation (M3+ only), but that only matters for a *macOS* guest; Linux
+# containers inside a Linux guest are not nested virt and run natively.
+rosetta:
+  enabled: true
+  binfmt: true
+
+cpus: 4           # of 8 — leaves the host responsive
+memory: 12GiB     # of 24
+disk: 120GiB      # sparse; grows on demand
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+
+# --- Isolation ----------------------------------------------------------------
+# NO host mounts. This is the decision the whole design rests on: the code lives
+# in the VM, and the only channels to the host are git, forwarded ports, and
+# explicit `limactl copy`. A host mount here would give the agent a path back to
+# ~/Documents and make the VM decoration.
+mounts: []
+mountType: virtiofs   # only relevant if a mount is ever added; kept explicit
+
+ssh:
+  # Don't copy host ~/.ssh/*.pub into the guest. Public keys are harmless, but
+  # the VM has its own key for GitHub (see setup-github.sh) and access is via
+  # Lima's generated key, so there is no reason to link the two identities.
+  loadDotSSHPubKeys: false
+
+# Lima ships containerd/nerdctl by default. We install Docker Engine instead
+# (below), so leaving these on would waste several GB for nothing.
+containerd:
+  system: false
+  user: false
+
+# --- Ports --------------------------------------------------------------------
+# Lima forwards guest ports bound to 0.0.0.0 automatically. Ports bound to
+# 127.0.0.1 *inside* the guest are invisible unless declared here.
+#
+# Preferred fix is still to bind 0.0.0.0 in the app (Vite: `server.host: true`),
+# which needs no entry below. These rules are belt-and-braces for tools that
+# hardcode localhost — notably the Supabase CLI.
+#   5173 vite dev · 4173 vite preview · 5174 e2e's own vite dev
+#   54321 supabase api · 54322 db · 54323 studio · 54324 mailpit
+portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [5173, 5175]
+    hostIP: "127.0.0.1"
+    hostPortRange: [5173, 5175]
+  - guestIP: "127.0.0.1"
+    guestPortRange: [4173, 4173]
+    hostIP: "127.0.0.1"
+    hostPortRange: [4173, 4173]
+  - guestIP: "127.0.0.1"
+    guestPortRange: [54321, 54324]
+    hostIP: "127.0.0.1"
+    hostPortRange: [54321, 54324]
+
+# --- Pinned versions ----------------------------------------------------------
+# One set for every project. Bumping these bumps all ~40 repos at once; that is
+# the point, and it is also the risk. Bump deliberately.
+env:
+  NODE_VERSION: "26.7.0"
+  PNPM_VERSION: "12.4.2"
+  OPENSPEC_VERSION: "1.9.0"
+  SUPABASE_CLI_VERSION: "2.115.0"
+  JAVA_VERSION: "21"
+
+provision:
+  # ---------------------------------------------------------------------------
+  # SYSTEM: root-owned packages.
+  # ---------------------------------------------------------------------------
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+
+      # postgresql-client: the migration scripts run raw SQL against the shared
+      # Supabase instance directly (the Supabase CLI's own migration up/db push
+      # stop working once a database is shared across apps' migration
+      # histories). Ported as-is from homefleet's Dockerfile.
+      apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg unzip zsh ripgrep jq \
+        build-essential postgresql-client
+
+      # --- Java: Eclipse Temurin via the Adoptium apt repo --------------------
+      # Temurin specifically, not openjdk: matches what CI's actions/setup-java
+      # uses. Needed for the Serenity BDD report generator CLI, which
+      # @serenity-js/serenity-bdd invokes — it ships its own jar but still needs
+      # `java` on PATH.
+      # GONE: the devcontainer java Feature, and with it the `jdkDistro: tem`
+      # workaround (the Feature's version regex couldn't parse Microsoft's
+      # `21.0.12+1-ms` identifiers, so a bare "version": "21" failed the build).
+      # apt has no such parsing problem.
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+        > /etc/apt/sources.list.d/adoptium.list
+
+      # --- Docker Engine, native ---------------------------------------------
+      # Not Docker Desktop: no licence question, no 47GB VM-inside-a-VM, and
+      # containers run directly on this kernel. This is where
+      # supabase-local-platform runs.
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        > /etc/apt/sources.list.d/docker.list
+
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        "temurin-${JAVA_VERSION}-jdk" \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      usermod -aG docker "${LIMA_CIDATA_USER}"
+      systemctl enable --now docker
+
+      # --- Supabase CLI -------------------------------------------------------
+      # Static binary, not a global npm install (which Supabase deprecates).
+      # Ported from post-create.sh step 3, but installed ONCE for the machine
+      # instead of once per container.
+      if [ "$(supabase --version 2>/dev/null || echo none)" != "${SUPABASE_CLI_VERSION}" ]; then
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "$tmp/supabase.tar.gz" \
+          "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_linux_arm64.tar.gz"
+        tar -xzf "$tmp/supabase.tar.gz" -C "$tmp" supabase
+        install -m 0755 "$tmp/supabase" /usr/local/bin/supabase
+        rm -rf "$tmp"
+      fi
+
+      apt-get clean && rm -rf /var/lib/apt/lists/*
+
+  # ---------------------------------------------------------------------------
+  # USER: the JS toolchain, owned by the login user.
+  #
+  # GONE, all of it, from post-create.sh:
+  #   step 1  volume ownership chowns  — no named volumes, no root-owned mounts
+  #   step 1b ~/.claude.json migration — no CLAUDE_CONFIG_DIR; ~/.claude is just
+  #           a directory in a home directory that persists because it is a VM
+  #   step 4  pnpm store-dir + the XDG_CONFIG_HOME/JetBrains double-write — the
+  #           default store at ~/.local/share/pnpm/store is already shared by
+  #           every project on this machine, which is all /cache ever wanted
+  #   step 5  per-repo pnpm install — belongs to the repo, not the environment
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export FNM_DIR="$HOME/.fnm"
+      export PNPM_HOME="$HOME/.local/share/pnpm"
+      export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"
+
+      # --- fnm + one Node -----------------------------------------------------
+      # fnm stays, but its job changed. In the containers it auto-switched Node
+      # per directory (--use-on-cd) to honour each repo's .node-version pin.
+      # Here there is ONE version for every project, so fnm is only the
+      # mechanism for bumping it. Deliberately no --use-on-cd.
+      if [ ! -x "$FNM_DIR/fnm" ]; then
+        curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell
+      fi
+      "$FNM_DIR/fnm" install "${NODE_VERSION}"
+      "$FNM_DIR/fnm" default "${NODE_VERSION}"
+      eval "$("$FNM_DIR/fnm" env)"
+
+      # --- pnpm, standalone ---------------------------------------------------
+      # Self-contained, not tied to a Node install, so an fnm patch bump won't
+      # lose it. pnpm v10+ self-manages each repo's `packageManager` field, so
+      # this single binary transparently serves repos still pinned anywhere from
+      # 11.5.2 to 12.4.2 — the pins can be normalised later, at leisure.
+      if [ "$(pnpm --version 2>/dev/null || echo none)" != "${PNPM_VERSION}" ]; then
+        curl -fsSL https://get.pnpm.io/install.sh \
+          | env PNPM_VERSION="${PNPM_VERSION}" SHELL=/bin/bash sh -
+      fi
+
+      # --- OpenSpec CLI -------------------------------------------------------
+      # npm, not pnpm: drops the binary into the fnm Node's bin, already on PATH.
+      # A machine dev tool, not an app dependency. Use the SCOPED package — the
+      # bare `openspec` on npm is an empty placeholder.
+      npm install -g "@fission-ai/openspec@${OPENSPEC_VERSION}"
+
+      # --- Shell wiring -------------------------------------------------------
+      # bash AND zsh, same as the Dockerfile did. Built with echo rather than a
+      # heredoc on purpose: a heredoc body has to sit at column 0, which would
+      # terminate this YAML block scalar early.
+      #
+      # NOT written here, deliberately:
+      #   --use-on-cd            one Node version now; fnm only bumps it
+      #   PLAYWRIGHT_BROWSERS_PATH / PLAYWRIGHT_SKIP_BROWSER_GC
+      #     The shared browser volume needed both. Playwright's .links files
+      #     hold absolute paths into a per-project node_modules volume that
+      #     sibling containers could not see, so each container decided the
+      #     others' browsers were orphans and garbage-collected them. One
+      #     filesystem, all node_modules mutually visible: the paths resolve,
+      #     validation passes, nothing is collected. Default location is fine.
+      #   CLAUDE_CONFIG_DIR, GH_CONFIG_DIR
+      #     Both existed to drag credentials onto a mounted volume. ~/.claude
+      #     and ~/.config/gh are now just directories in a home directory that
+      #     persists, which is what they always assumed they were.
+      for shell in bash zsh; do
+        rc="$HOME/.${shell}rc"
+        touch "$rc"
+        if ! grep -q 'dev vm toolchain' "$rc"; then
+          {
+            echo ''
+            echo '# --- dev vm toolchain ---'
+            echo 'export FNM_DIR="$HOME/.fnm"'
+            echo 'export PNPM_HOME="$HOME/.local/share/pnpm"'
+            echo 'export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"'
+            echo 'eval "$(fnm env)"'
+            echo 'export OPENSPEC_TELEMETRY=0'
+          } >> "$rc"
+        fi
+      done
+
+      mkdir -p "$HOME/projects"
+
+  # ---------------------------------------------------------------------------
+  # USER: Playwright browsers. Separate step so a flaky download can't take the
+  # toolchain down with it — best-effort, same as post-create.sh step 6.
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      export FNM_DIR="$HOME/.fnm"
+      export PATH="$FNM_DIR:$HOME/.local/share/pnpm/bin:$PATH"
+      eval "$("$FNM_DIR/fnm" env)"
+
+      sudo env "PATH=$PATH" npx --yes playwright install-deps chromium \
+        || echo "! playwright OS deps skipped"
+      npx --yes playwright install chromium \
+        || echo "! playwright chromium skipped — run 'npx playwright install chromium' later"
+
+# --- Readiness ----------------------------------------------------------------
+probes:
+  - description: "toolchain (node, pnpm, openspec, java, docker)"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 300s bash -c 'until [ -x "$HOME/.fnm/fnm" ]; do sleep 3; done'
+      timeout 300s bash -c 'until command -v docker >/dev/null; do sleep 3; done'
+    hint: "Toolchain did not provision. Check: limactl shell dev -- sudo journalctl -u cloud-final"
+
+message: |
+  Dev VM is up.
+
+  Wire it to the Claude Code desktop app:
+    limactl show-ssh {{.Name}} --format=config >> ~/.ssh/config
+  then add SSH host `lima-{{.Name}}` in the app's environment dropdown.
+
+  Then, once, inside the VM:
+    ./setup-github.sh
