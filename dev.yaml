@@ -25,43 +25,43 @@ rosetta:
   enabled: true
   binfmt: true
 
-cpus: 4           # of 8 — leaves the host responsive
-memory: 12GiB     # of 24
+# The host is genuinely thin now — Gateway's thin client and a browser — while
+# the VM runs the agent, the builds AND a full WebStorm backend. JetBrains asks
+# for 2+ cores and 4GB+ for the backend alone, on top of whatever the build
+# needs, so this is up from the 4/12 of the mounted-folder design.
+# This is the one knob to turn if things feel tight.
+cpus: 6           # of 8
+memory: 14GiB     # of 24 — leaves 10GB for macOS and the thin client
 # Sparse — a ceiling, not an allocation; it consumes only what is written.
-# With the source AND node_modules on the host mount, the VM holds the Ubuntu
-# base, the toolchain, the pnpm store and Supabase's Docker images: ~15GB in
-# practice. 80GiB is headroom, not a commitment.
-disk: 80GiB
+# The VM now holds everything: base, toolchain, all ~40 repos (~5.5GB of
+# source), every node_modules (~5.3GB), the pnpm store, Supabase's Docker
+# images, and the IDE backend's own caches and indexes, which are not small.
+# ~35GB in practice.
+disk: 120GiB
 
 images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: aarch64
 
 # --- Isolation ----------------------------------------------------------------
-# ONE shared folder, writable: the repos live on the host so WebStorm can run
-# natively and show code as the agent writes it.
+# NO host mounts. Everything — code, node_modules, the IDE backend — lives on
+# the VM's local disk; WebStorm attaches over SSH via JetBrains Gateway with
+# only the thin client on the Mac.
 #
-# What this exposes: ~/projects/current. What it does NOT: ~/Documents, ~/.ssh,
-# the keychain, ~/Library, Xcode. The agent can damage the repos — all of which
-# are in git and pushed — and nothing else on the machine. This is the same
-# posture the dev containers already had, since a devcontainer bind-mounts its
-# workspace folder by default; the difference is that all ~40 repos are now
-# visible at once instead of one per container.
+# This was briefly a writable mount of ~/projects/current so host-native
+# WebStorm could see the code. The problem that killed it: node_modules would
+# be shared, so native binaries (esbuild, rollup, sharp) belonged to whichever
+# OS installed last — exactly what the dev containers' per-project
+# node_modules volumes existed to prevent. The alternative, keeping
+# node_modules VM-local, left WebStorm unable to resolve an import.
 #
-# mountPoint deliberately mirrors the host path. It looks odd on Linux, but it
-# means a path is the same string in WebStorm and in a Claude Code session, so
-# nothing has to be translated between them. ~/projects symlinks to it for
-# typing convenience (see the user provision step).
-mounts:
-  - location: "~/projects/current"
-    mountPoint: "/Users/paulrule/projects/current"
-    writable: true
-
-# virtiofs, not reverse-sshfs or 9p: the only one worth using for a writable
-# mount under vz. It is still slower than native for metadata-heavy work —
-# pnpm install, the TS language server, Vite HMR, Playwright all cross it. That
-# is the accepted cost of host-native WebStorm.
-mountType: virtiofs
+# Moving the IDE to the same side of the boundary as the code dissolves that
+# instead of trading around it: one filesystem, one Node, one set of binaries,
+# nothing to keep in sync. JetBrains also states that network filesystems are
+# unsupported for the backend and that it wants local disk, so a shared folder
+# was working against the IDE as well.
+mounts: []
+mountType: virtiofs   # only relevant if a mount is ever added; kept explicit
 
 ssh:
   # Don't copy host ~/.ssh/*.pub into the guest. Public keys are harmless, but
@@ -138,8 +138,34 @@ provision:
       # stop working once a database is shared across apps' migration
       # histories). Ported as-is from homefleet's Dockerfile.
       apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg unzip zsh ripgrep jq \
+        ca-certificates curl git gnupg unzip zsh ripgrep jq less \
         build-essential postgresql-client
+
+      # --- JetBrains remote backend prerequisites -----------------------------
+      # Gateway downloads and runs the WebStorm backend itself (into
+      # ~/.cache/JetBrains), so there is nothing to install for the IDE as
+      # such. Two things it does need from the OS:
+      #
+      # 1. A handful of X/font libraries. JetBrains' own docs say the backend
+      #    is self-contained and needs no extra dependencies, but their Alpine
+      #    requirements list these explicitly and headless Debian images are
+      #    routinely missing them. ~20MB of insurance against a backend that
+      #    starts and then dies on a missing libXext.
+      apt-get install -y --no-install-recommends \
+        libxext6 libxrender1 libxtst6 libxi6 libfreetype6 fontconfig procps
+
+      # 2. More inotify watches. The default is far too low for an IDE indexing
+      #    forty repos; past the limit the IntelliJ platform silently gives up
+      #    on file watching and falls back to recursive directory scans, which
+      #    is the "why is my IDE constantly re-scanning" symptom. 524288 is
+      #    JetBrains' own recommendation.
+      # printf, not a heredoc: a heredoc body and terminator have to sit at
+      # column 0, which inside this YAML block scalar is impossible — the
+      # terminator ends up indented, bash never recognises it, and the rest of
+      # the script gets swallowed into the file. `bash -n` does NOT catch it.
+      printf 'fs.inotify.max_user_watches = %s\nfs.inotify.max_user_instances = %s\n' \
+        524288 512 > /etc/sysctl.d/60-jetbrains-inotify.conf
+      sysctl -p /etc/sysctl.d/60-jetbrains-inotify.conf
 
       # --- Java: Eclipse Temurin via the Adoptium apt repo --------------------
       # Temurin specifically, not openjdk: matches what CI's actions/setup-java
@@ -289,11 +315,9 @@ provision:
         fi
       done
 
-      # ~/projects/current -> the host mount, so `cd ~/projects/current/foo`
-      # works without typing the /Users path.
-      mkdir -p "$HOME/projects"
-      [ -e "$HOME/projects/current" ] \
-        || ln -s /Users/paulrule/projects/current "$HOME/projects/current"
+      # Where the repos get cloned. Mirrors the host layout out of habit, so
+      # paths read the same in notes and commit messages.
+      mkdir -p "$HOME/projects/current"
 
   # ---------------------------------------------------------------------------
   # USER: Playwright browsers. Separate step so a flaky download can't take the
@@ -324,16 +348,14 @@ probes:
       # installed and alternatives silently prefer the highest.
       java -version 2>&1 | grep -q "\"${PARAM_JAVA_DEFAULT}\\." 
     hint: "Toolchain did not provision. Check: limactl shell dev -- sudo journalctl -u cloud-final"
-  - description: "host mount present and writable"
+  - description: "IDE backend prerequisites"
     script: |
       #!/bin/bash
       set -eux -o pipefail
-      timeout 60s bash -c 'until [ -d /Users/paulrule/projects/current ]; do sleep 2; done'
-      # Mounted-but-read-only is the failure that looks like success: the agent
-      # reads fine and every write fails. Assert writability, not presence.
-      touch /Users/paulrule/projects/current/.lima-write-probe
-      rm -f /Users/paulrule/projects/current/.lima-write-probe
-    hint: "~/projects/current is not mounted writable. Check `writable: true` and that the host path exists."
+      # Below ~500k the IDE quietly stops watching files and starts rescanning.
+      test "$(sysctl -n fs.inotify.max_user_watches)" -ge 524288
+      ldconfig -p | grep -q libXext
+    hint: "IDE prerequisites missing. Gateway may connect and then drop the backend."
 
 message: |
   Dev VM is up.
@@ -344,3 +366,8 @@ message: |
 
   Then, once, inside the VM:
     ./setup-github.sh
+
+  WebStorm, on the host:
+    brew install --cask jetbrains-gateway
+    Gateway -> SSH -> lima-{{.Name}} -> project dir under ~/projects/current
+  Gateway downloads the backend into the VM on first connect.

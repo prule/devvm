@@ -7,14 +7,14 @@ Replaces the per-project `.devcontainer/` setup. Rationale and trade-offs:
 
 ```
 macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
-├── Claude Code desktop app ───SSH───► ├── Node 26.7.0, pnpm 12.4.2, OpenSpec
-├── WebStorm (native)                  ├── Temurin 25 (+21), Playwright
-├── Browser → localhost:5173           ├── Docker Engine → supabase-local-platform
-├── Xcode / iOS Simulator              └── ~/.claude, ~/.config/gh (one login)
-└── Time Machine (excludes ~/.lima)
-                                       
-    ~/projects/current ◄── virtiofs, writable ──► /Users/paulrule/projects/current
-    (host: WebStorm reads/edits)                  (VM: agent, pnpm, builds)
+├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  all 40 repos
+├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
+│   (thin client only)                 ├── Node 26.7.0, pnpm 12.4.2, OpenSpec
+├── Browser → localhost:5173           ├── Temurin 25 (+21), Playwright
+├── Xcode / iOS Simulator              ├── Docker → supabase-local-platform
+└── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
+
+Two thin clients on the Mac, one box doing the work. No shared folders.
 ```
 
 ## Files
@@ -24,7 +24,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 | `dev.yaml` | The environment. Lima config + all provisioning. **The only source of truth.** |
 | `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, excludes `~/.lima` from Time Machine. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
-| `migrate-repo.sh` | Run in the VM, once per repo. Drops `.devcontainer/`, pins Node, wipes macOS-built `node_modules`, reinstalls. |
+| `migrate-repo.sh` | Run in the VM, once per repo. Clones, drops `.devcontainer/`, pins Node, installs. |
 
 ## Quickstart
 
@@ -45,21 +45,27 @@ limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; java -versi
 alternatives prefer the highest available, so this is worth actually reading
 rather than glancing at.
 
-## The two rules
+## WebStorm
 
-> **pnpm runs in the VM only. Never on the host.**
+```bash
+brew install --cask jetbrains-gateway
+```
 
-`~/projects/current` is shared writable, so `node_modules` is shared too — and native binaries (esbuild, rollup, sharp, better-sqlite3) belong to whichever OS installed last. The dev containers kept `node_modules` on per-project volumes precisely to stop this mixing; the shared mount gives that protection up in exchange for host-native WebStorm. Running `pnpm install` on the Mac will break every build in the VM until you reinstall there.
+Gateway → **SSH** → `lima-dev` → pick a project under `~/projects/current`. It downloads the WebStorm backend into the VM on first connect; the thin client is the only JetBrains process on the Mac.
 
-Same applies to anything that writes `node_modules`: let WebStorm *read* the project, but don't let it run installs or npm scripts on the host.
+This is the same architecture the dev containers used via `"jetbrains": { "backend": "WebStorm" }` — IDE backend next to the code, GUI on the host.
 
+It is also why there is no shared folder. A writable mount of `~/projects/current` would put `node_modules` on both sides of the boundary, where native binaries (esbuild, rollup, sharp) belong to whichever OS installed last — exactly what the containers' per-project `node_modules` volumes prevented. Keeping `node_modules` VM-local instead left the host IDE unable to resolve an import. Moving the IDE to the code's side of the boundary dissolves the problem rather than trading around it, and JetBrains wants local disk for the backend anyway — network filesystems are explicitly unsupported.
 
+`dev.yaml` provisions the two things the backend needs from the OS: a few X/font libraries, and `fs.inotify.max_user_watches = 524288` (below roughly that, the IntelliJ platform stops watching files and falls back to recursive rescans).
+
+## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
 
-`vmType: vz` means no snapshots (`limactl snapshot` is QEMU-only). There is no restore point — recovery is `limactl delete dev && ./bootstrap.sh`, which only works if this file is complete. So never fix a missing package with a bare `sudo apt install` in the VM; add it here and reprovision.
+`vmType: vz` means no snapshots (`limactl snapshot` is QEMU-only). There is no restore point — recovery is `limactl delete dev && ./bootstrap.sh`, which only works if this file is complete. So never fix a missing package with a bare `sudo apt install`; add it here and reprovision.
 
-Nothing in the VM is backed up. Everything that matters is in git and pushed.
+Nothing in the VM is backed up. Everything that matters is in git — so push before you stop for the day. That is an obligation, not a shrug.
 
 ## Bumping the toolchain
 
@@ -73,14 +79,12 @@ This bumps all ~40 projects at once. That is the intent, and also the risk — i
 
 ## Gotchas
 
-- **Expect virtiofs to be slower.** `pnpm install`, the TS language server, Vite HMR and Playwright all cross the mount now. This is the known, accepted cost of running WebStorm natively on the host. If a specific project becomes painful, that one project's `node_modules` can be bind-mounted to a VM-local directory — at the price of WebStorm losing import resolution for it.
-- **Paths are identical on both sides.** `mountPoint` mirrors the host path, so `/Users/paulrule/projects/current/foo` means the same thing in WebStorm and in a Claude Code session. `~/projects/current` in the VM is a symlink to it.
-- **Time Machine.** `~/.lima` is excluded, but your code is on the host now, so it's backed up properly again. Worth excluding the `node_modules` trees so they don't bloat every snapshot.
+- **Sizing.** 6 CPU / 14 GB, up from 4/12, because the VM now runs a full IDE backend alongside the agent and the builds. JetBrains asks 2+ cores and 4 GB+ for the backend alone. This is the first knob to turn if it feels tight.
+- **No host mounts.** `mounts: []`. Moving files: `limactl copy`, or git. See **WebStorm** above for why.
 - **Java is the exception to "one version".** `JAVA_VERSIONS: "25 21"` — 25 is the default, 21 is present because several `laptime-insights` modules pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail. Drop 21 once nothing asks for it.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
 - **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
-- **One shared folder, not the whole home directory.** `~/projects/current` is writable from the VM; `~/Documents`, `~/.ssh`, the keychain and `~/Library` are not. The agent can damage the repos — all in git, all pushed — and nothing else. This is the same posture the dev containers had, since a devcontainer bind-mounts its workspace by default.
 - **No agent forwarding, on purpose.** `bootstrap.sh` strips `ForwardAgent yes` if a regenerated SSH block ever introduces one. The VM has its own GitHub key.
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.
 - **Xcode / iOS stays on the host.** Nothing simulator-related can move into the VM.
