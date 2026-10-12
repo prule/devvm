@@ -70,9 +70,13 @@ It is also why there is no shared folder. A writable mount of `~/projects/curren
 
 ## Checking out the projects
 
-`clone-all.sh` reads `repos.tsv` — a generated manifest of `path  owner/repo  branch`. It exists instead of a `gh repo list` loop because **seven directories are named differently from their GitHub repo**:
+`clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`.
 
-| directory | repo |
+**Paths are aligned to repo names.** `make-manifest.sh` enforces that on every regeneration, so a checkout directory and its repo never drift apart. The manifest is still the source of truth and is hand-editable, so a path *can* be pointed elsewhere deliberately; `make-manifest.sh --as-is` captures such a layout back from disk instead of flattening it.
+
+Aligning dropped seven host-side mismatches, which is why the host and the VM will not have identical directory names:
+
+| host directory | VM directory (= repo) |
 |---|---|
 | `exercise` | `strength-guide` |
 | `youtube-aggregator` | `video-aggregator` |
@@ -82,13 +86,21 @@ It is also why there is no shared folder. A writable mount of `~/projects/curren
 | `quotes-github` | `quotes` |
 | `catchup-openspec-claude-48` | `catchup-open-spec-claude-48` |
 
-Cloning by repo name would produce wrongly-named directories and break every documented path.
+What the manifest still earns its place for, beyond names:
 
-Three other things the manifest captures that a naive loop misses:
+- **Branches.** Several repos are not on `main` — `sdlc` is on `chore/plugin-autoupdate`, `home-fleet` on `fix/assets-load-drain-race`, `bank-example` on `v2-openspec-claude`.
+- **Nested clones.** `laptime-insights/` and `bank-example-claude/` are plain folders holding their own repos; `programming/principles` likewise. Only the leaf is aligned — the parent folder is not a repo. Submodules are deliberately *absent*: `--recurse-submodules` brings `pauls-blog`'s theme and `strength`'s two along with their parent.
+- **Worktrees.** `sdlc-baseline-uc002` and `sdlc-pipeline-opus-uc002` are worktrees of `sdlc`, not clones. `worktrees.tsv` records them and they are added with `git worktree add` after the parent exists. Their names are worktree labels, not repos, so they are not aligned.
 
-- **Branches.** Several repos are not on `main` — `sdlc` is on `chore/plugin-autoupdate`, `homefleet` on `fix/assets-load-drain-race`, `bank-example` on `v2-openspec-claude`.
-- **Nested clones.** `laptime-insights/` and `bank-example-claude/` are plain folders holding their own repos; `programming/principles` likewise. Submodules are deliberately *absent* from the manifest — `--recurse-submodules` brings `pauls-blog`'s theme and `strength`'s two along with their parent.
-- **Worktrees.** `sdlc-baseline-uc002` and `sdlc-pipeline-opus-uc002` are worktrees of `sdlc`, not clones. `worktrees.tsv` records them and they are added with `git worktree add` after the parent is cloned.
+### Repos that appear twice
+
+Aligning made some pre-existing duplication obvious. These are the same repo checked out in two places, and `clone-all.sh` will fetch each twice:
+
+- `prule/bank-example` — as `bank-example` and as `bank-example-claude/bank-example`
+- `prule/strength-guide` — as `strength-guide` (was `exercise`) and as `strength`'s submodule
+- `prule/strength-programs` — as `strength-programs` and as `strength`'s submodule
+
+Not a bug, but worth deciding about rather than inheriting.
 
 ### What this does NOT cover
 
