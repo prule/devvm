@@ -24,13 +24,22 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 | `dev.yaml` | The environment. Lima config + all provisioning. **The only source of truth.** |
 | `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, excludes `~/.lima` from Time Machine. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
-| `migrate-repo.sh` | Run in the VM, once per repo. Clones, drops `.devcontainer/`, pins Node, installs. |
+| `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
+| `clone-all.sh` | Run in the VM. Clones every project from the manifest, adds the worktrees, warns about what git does not cover. |
+| `migrate-repo.sh` | Run in the VM, once per repo. Drops `.devcontainer/`, pins Node, installs deps. |
 
 ## Quickstart
 
 ```bash
 ./bootstrap.sh
 limactl copy setup-github.sh dev:/tmp/ && limactl shell dev -- bash /tmp/setup-github.sh
+```
+
+Check out every project:
+
+```bash
+./clone-all.sh --dry-run    # see what it would do
+./clone-all.sh              # clone everything missing
 ```
 
 Then in the Claude Code desktop app: environment dropdown → **+ Add SSH connection** → host `lima-dev`, leave port and identity file empty (they come from `~/.ssh/config`). Claude Code installs itself on the VM on first connect.
@@ -58,6 +67,36 @@ This is the same architecture the dev containers used via `"jetbrains": { "backe
 It is also why there is no shared folder. A writable mount of `~/projects/current` would put `node_modules` on both sides of the boundary, where native binaries (esbuild, rollup, sharp) belong to whichever OS installed last — exactly what the containers' per-project `node_modules` volumes prevented. Keeping `node_modules` VM-local instead left the host IDE unable to resolve an import. Moving the IDE to the code's side of the boundary dissolves the problem rather than trading around it, and JetBrains wants local disk for the backend anyway — network filesystems are explicitly unsupported.
 
 `dev.yaml` provisions the two things the backend needs from the OS: a few X/font libraries, and `fs.inotify.max_user_watches = 524288` (below roughly that, the IntelliJ platform stops watching files and falls back to recursive rescans).
+
+## Checking out the projects
+
+`clone-all.sh` reads `repos.tsv` — a generated manifest of `path  owner/repo  branch`. It exists instead of a `gh repo list` loop because **seven directories are named differently from their GitHub repo**:
+
+| directory | repo |
+|---|---|
+| `exercise` | `strength-guide` |
+| `youtube-aggregator` | `video-aggregator` |
+| `toolbox` | `tool-box` |
+| `homefleet` | `home-fleet` |
+| `clipboard` | `clipboard-queue` |
+| `quotes-github` | `quotes` |
+| `catchup-openspec-claude-48` | `catchup-open-spec-claude-48` |
+
+Cloning by repo name would produce wrongly-named directories and break every documented path.
+
+Three other things the manifest captures that a naive loop misses:
+
+- **Branches.** Several repos are not on `main` — `sdlc` is on `chore/plugin-autoupdate`, `homefleet` on `fix/assets-load-drain-race`, `bank-example` on `v2-openspec-claude`.
+- **Nested clones.** `laptime-insights/` and `bank-example-claude/` are plain folders holding their own repos; `programming/principles` likewise. Submodules are deliberately *absent* from the manifest — `--recurse-submodules` brings `pauls-blog`'s theme and `strength`'s two along with their parent.
+- **Worktrees.** `sdlc-baseline-uc002` and `sdlc-pipeline-opus-uc002` are worktrees of `sdlc`, not clones. `worktrees.tsv` records them and they are added with `git worktree add` after the parent is cloned.
+
+### What this does NOT cover
+
+`not-in-git.txt` lists 11 directories that are **in no git repo at all** — `bank-core` (55 MB), `car-enthusiast-alarm` (36 MB), `db2`, `alarm`, `cars`, `holidays`, `ourfit`, `strength2` and three empty ones. A clone-based migration loses them silently, so `clone-all.sh` prints them last, every run. Copy what you want deliberately:
+
+```bash
+limactl copy -r ~/projects/current/bank-core dev:/home/$USER/projects/current/
+```
 
 ## The rule
 
