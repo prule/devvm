@@ -29,7 +29,30 @@ MSG
   exit 1
 fi
 
-# --- 2. Lima ------------------------------------------------------------------
+# --- 2. The shared folder -----------------------------------------------------
+# Must exist before the VM starts, or the mount silently has nothing behind it.
+[ -d ~/projects/current ] || { echo "~/projects/current does not exist" >&2; exit 1; }
+
+# macOS-built node_modules on the shared mount will be overwritten by the VM's
+# Linux install, and anything the host built is unusable there anyway.
+nm_count=$(find ~/projects/current -maxdepth 3 -name node_modules -type d -prune 2>/dev/null | wc -l | tr -d ' ')
+if [ "$nm_count" -gt 0 ]; then
+  nm_size=$(find ~/projects/current -maxdepth 3 -name node_modules -type d -prune -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {printf "%.1fGB", s/1048576}')
+  say "Found ${nm_count} macOS-built node_modules trees (${nm_size})"
+  cat <<MSG
+
+  From here on pnpm runs in the VM only — never on the host. Whichever OS
+  installed last owns the native binaries (esbuild, rollup, sharp...), and the
+  dev containers used per-project volumes precisely to stop them mixing.
+
+  migrate-repo.sh deletes each one as it migrates that repo, so this is a
+  heads-up rather than an action. To reclaim the space now:
+    find ~/projects/current -maxdepth 3 -name node_modules -type d -prune -exec rm -rf {} +
+
+MSG
+fi
+
+# --- 3. Lima ------------------------------------------------------------------
 command -v limactl >/dev/null || { say "Installing Lima"; brew install lima; }
 
 if limactl list --quiet 2>/dev/null | grep -qx "$VM_NAME"; then
@@ -40,7 +63,7 @@ else
   limactl start "$HERE/dev.yaml" --name="$VM_NAME" --tty=false
 fi
 
-# --- 3. SSH config ------------------------------------------------------------
+# --- 4. SSH config ------------------------------------------------------------
 # This is the integration point: it writes a real `lima-dev` Host block, which
 # is exactly what the desktop app's SSH connection dialog consumes.
 say "Updating ~/.ssh/config"
@@ -60,9 +83,11 @@ if grep -qi '^[[:space:]]*ForwardAgent[[:space:]]\+yes' "$tmp"; then
 fi
 install -m 600 "$tmp" ~/.ssh/config && rm -f "$tmp"
 
-# --- 4. Time Machine ----------------------------------------------------------
-# A 120GB disk image that changes constantly will otherwise be re-backed-up
-# forever. Everything that matters is in git.
+# --- 5. Time Machine ----------------------------------------------------------
+# An 80GB disk image that changes constantly will otherwise be re-backed-up
+# forever. The code itself now lives on the host, so Time Machine covers it
+# properly again — one real benefit of the shared folder over keeping the
+# source inside the VM.
 if ! tmutil isexcluded ~/.lima 2>/dev/null | grep -q '\[Excluded\]'; then
   say "Excluding ~/.lima from Time Machine"
   tmutil addexclusion ~/.lima || say "  (skipped — needs Full Disk Access)"

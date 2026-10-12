@@ -27,19 +27,41 @@ rosetta:
 
 cpus: 4           # of 8 — leaves the host responsive
 memory: 12GiB     # of 24
-disk: 120GiB      # sparse; grows on demand
+# Sparse — a ceiling, not an allocation; it consumes only what is written.
+# With the source AND node_modules on the host mount, the VM holds the Ubuntu
+# base, the toolchain, the pnpm store and Supabase's Docker images: ~15GB in
+# practice. 80GiB is headroom, not a commitment.
+disk: 80GiB
 
 images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: aarch64
 
 # --- Isolation ----------------------------------------------------------------
-# NO host mounts. This is the decision the whole design rests on: the code lives
-# in the VM, and the only channels to the host are git, forwarded ports, and
-# explicit `limactl copy`. A host mount here would give the agent a path back to
-# ~/Documents and make the VM decoration.
-mounts: []
-mountType: virtiofs   # only relevant if a mount is ever added; kept explicit
+# ONE shared folder, writable: the repos live on the host so WebStorm can run
+# natively and show code as the agent writes it.
+#
+# What this exposes: ~/projects/current. What it does NOT: ~/Documents, ~/.ssh,
+# the keychain, ~/Library, Xcode. The agent can damage the repos — all of which
+# are in git and pushed — and nothing else on the machine. This is the same
+# posture the dev containers already had, since a devcontainer bind-mounts its
+# workspace folder by default; the difference is that all ~40 repos are now
+# visible at once instead of one per container.
+#
+# mountPoint deliberately mirrors the host path. It looks odd on Linux, but it
+# means a path is the same string in WebStorm and in a Claude Code session, so
+# nothing has to be translated between them. ~/projects symlinks to it for
+# typing convenience (see the user provision step).
+mounts:
+  - location: "~/projects/current"
+    mountPoint: "/Users/paulrule/projects/current"
+    writable: true
+
+# virtiofs, not reverse-sshfs or 9p: the only one worth using for a writable
+# mount under vz. It is still slower than native for metadata-heavy work —
+# pnpm install, the TS language server, Vite HMR, Playwright all cross it. That
+# is the accepted cost of host-native WebStorm.
+mountType: virtiofs
 
 ssh:
   # Don't copy host ~/.ssh/*.pub into the guest. Public keys are harmless, but
@@ -267,7 +289,11 @@ provision:
         fi
       done
 
+      # ~/projects/current -> the host mount, so `cd ~/projects/current/foo`
+      # works without typing the /Users path.
       mkdir -p "$HOME/projects"
+      [ -e "$HOME/projects/current" ] \
+        || ln -s /Users/paulrule/projects/current "$HOME/projects/current"
 
   # ---------------------------------------------------------------------------
   # USER: Playwright browsers. Separate step so a flaky download can't take the
@@ -298,6 +324,16 @@ probes:
       # installed and alternatives silently prefer the highest.
       java -version 2>&1 | grep -q "\"${PARAM_JAVA_DEFAULT}\\." 
     hint: "Toolchain did not provision. Check: limactl shell dev -- sudo journalctl -u cloud-final"
+  - description: "host mount present and writable"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 60s bash -c 'until [ -d /Users/paulrule/projects/current ]; do sleep 2; done'
+      # Mounted-but-read-only is the failure that looks like success: the agent
+      # reads fine and every write fails. Assert writability, not presence.
+      touch /Users/paulrule/projects/current/.lima-write-probe
+      rm -f /Users/paulrule/projects/current/.lima-write-probe
+    hint: "~/projects/current is not mounted writable. Check `writable: true` and that the host path exists."
 
 message: |
   Dev VM is up.
