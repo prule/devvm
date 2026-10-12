@@ -32,12 +32,33 @@ rosetta:
 # This is the one knob to turn if things feel tight.
 cpus: 6           # of 8
 memory: 14GiB     # of 24 — leaves 10GB for macOS and the thin client
-# Sparse — a ceiling, not an allocation; it consumes only what is written.
-# The VM now holds everything: base, toolchain, all ~40 repos (~5.5GB of
-# source), every node_modules (~5.3GB), the pnpm store, Supabase's Docker
-# images, and the IDE backend's own caches and indexes, which are not small.
-# ~35GB in practice.
-disk: 120GiB
+# Measured, not guessed. All 32 repos together are 0.24GB of tracked source
+# plus git history — the code is tiny. The budget:
+#
+#   Ubuntu base + apt (2 JDKs ~700MB, Docker, build-essential, X libs)  ~3GB
+#   Node + pnpm + OpenSpec                                            ~0.3GB
+#   pnpm store                                                        ~4.5GB
+#   node_modules incremental over the store                           ~1.5GB
+#   Playwright + Chromium                                               ~1GB
+#   Supabase Docker images                                              ~4GB
+#   WebStorm backend + indexes                                          ~4GB
+#   source, .git, build output                                        ~1.5GB
+#   ----------------------------------------------------------------------
+#   realistic peak                                                     ~20GB
+#
+# node_modules is cheap because pnpm hardlinks into the store on ext4, so those
+# trees are mostly the same inodes as the store rather than copies of it. Note
+# the exception: only ~10 of the 40 repos use pnpm. The npm/yarn ones (sdlc,
+# toolbox, promo-manager, countdown-backend...) write flat duplicated trees
+# with no dedup, and they are what the 1.5GB above is mostly for.
+#
+# Sparse, so this is a ceiling and not a reservation — but not therefore free.
+# The image grows and never shrinks when files are deleted inside the guest, so
+# it only ratchets up, and the host has ~77GB free once Docker Desktop goes. A
+# ceiling above that lets a runaway build fill the macOS boot volume. 60GiB is
+# 3x the realistic peak and still well inside the host's free space.
+# Growing a Lima disk later is supported; shrinking is not. Start small.
+disk: 60GiB
 
 images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
@@ -230,6 +251,14 @@ provision:
       fi
 
       apt-get clean && rm -rf /var/lib/apt/lists/*
+
+      # Counteract the sparse-image ratchet where the stack allows it: fstrim
+      # tells the host which blocks are free again. Ubuntu enables this timer
+      # by default; making it explicit because it matters more here than usual.
+      # Whether the freed blocks are actually reclaimed depends on discard
+      # support through virtio-blk under vz, so treat it as a best effort and
+      # watch `ls -lks ~/.lima/dev/diffdisk` on the host if the image creeps.
+      systemctl enable fstrim.timer || true
 
   # ---------------------------------------------------------------------------
   # USER: the JS toolchain, owned by the login user.
