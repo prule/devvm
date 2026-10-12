@@ -339,6 +339,14 @@ provision:
             echo 'export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"'
             echo 'eval "$(fnm env)"'
             echo 'export OPENSPEC_TELEMETRY=0'
+            echo ''
+            echo '# Layer 4 of the pnpm guard, and the only one that fires before'
+            echo '# anything is written. The repo-level guards are a preinstall hook'
+            echo '# (bypassed by --ignore-scripts), .gitignore, and a CI check — all of'
+            echo '# which catch the mistake after the fact. This catches it first.'
+            echo '# Scoped to install-type commands and only where a pnpm lockfile is'
+            echo '# present, so `npm install -g` and the genuinely-npm repos still work.'
+            echo 'npm() { case "$1" in install|i|ci|add|update) if [ -f pnpm-lock.yaml ]; then printf "%s\n" "pnpm-lock.yaml present - use pnpm, not npm" >&2; return 1; fi ;; esac; command npm "$@"; }'
             echo "export JAVA_HOME=/usr/lib/jvm/temurin-${PARAM_JAVA_DEFAULT}-jdk-arm64"
           } >> "$rc"
         fi
