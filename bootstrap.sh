@@ -5,7 +5,11 @@ set -euo pipefail
 
 VM_NAME="${VM_NAME:-dev}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISK_NEEDED_GB=60   # not the 120GiB sparse max — just enough headroom to start
+# Not the 60GiB sparse ceiling — the realistic peak is ~20GB (see dev.yaml's
+# budget), so this is that plus headroom. It was 60 when the ceiling was
+# 120GiB, which would have refused to run even after Docker Desktop's 31GB
+# came back: 20GB free + 31GB = 51GB.
+DISK_NEEDED_GB=35
 
 say() { printf '\n==> %s\n' "$*"; }
 
@@ -19,8 +23,10 @@ if [ "$avail_gb" -lt "$DISK_NEEDED_GB" ]; then
   cat >&2 <<MSG
 Not enough free disk.
 
-  Docker Desktop's data is the likely culprit. Check it:
-    du -sh ~/Library/Containers/com.docker.docker
+  Docker Desktop's data is the likely culprit — its Docker.raw is ~31GB
+  on disk. Check what you would lose before deleting it:
+    docker system df            # images / volumes / build cache
+    docker volume ls            # named volumes hold DATA, not just images
 
   Quit Docker Desktop, then delete that directory, then re-run this script.
   Do NOT delete it while the VM migration is unverified if you still have
