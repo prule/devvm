@@ -234,7 +234,26 @@ provision:
       # Gradle finds the non-default JDKs here without auto-provisioning.
       echo "JAVA_HOME=$JAVA_HOME_DEFAULT" >> /etc/environment
 
-      usermod -aG docker "${LIMA_CIDATA_USER}"
+      # --- PATH for NON-interactive shells ------------------------------------
+      # The ~/.bashrc block below only runs in interactive shells: Ubuntu's
+      # stock .bashrc returns early when $- has no `i`, so `ssh host "node -v"`
+      # and any script-driven command would not find node/pnpm. PAM reads
+      # /etc/environment for every session regardless of shell mode, so the
+      # toolchain goes here too. No variable expansion is possible in this
+      # file, hence the absolute paths derived from uid 1000's home.
+      printf 'PATH="%s/.fnm/aliases/default/bin:%s/.local/share/pnpm/bin:%s/.fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' \
+        "$LOGIN_HOME" "$LOGIN_HOME" "$LOGIN_HOME" >> /etc/environment
+
+      # The login user is NOT uid 1000: Lima carries the host's uid into the
+      # guest (501 on macOS), and the home directory is <name>.guest. Lima 2.x
+      # also warns against referencing LIMA_CIDATA_*, so identify the user by
+      # scanning /etc/passwd for the first non-system account under /home.
+      LOGIN_USER="$(awk -F: '$3>=500 && $3<65000 && $6 ~ /^\/home\// {print $1; exit}' /etc/passwd)"
+      LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+      [ -n "$LOGIN_USER" ] && [ -d "$LOGIN_HOME" ] \
+        || { echo "could not identify the login user" >&2; exit 1; }
+
+      usermod -aG docker "$LOGIN_USER"
       systemctl enable --now docker
 
       # --- Supabase CLI -------------------------------------------------------
@@ -291,7 +310,15 @@ provision:
       fi
       "$FNM_DIR/fnm" install "${PARAM_NODE_VERSION}"
       "$FNM_DIR/fnm" default "${PARAM_NODE_VERSION}"
-      eval "$("$FNM_DIR/fnm" env)"
+
+      # Put node/npm on PATH via the default-alias directory rather than
+      # `eval "$(fnm env)"`. fnm infers the shell from its parent process, and
+      # in a provision script there is nothing to infer from: it fails with
+      # "Can't infer shell!", the eval expands to nothing, and the next line
+      # that needs npm dies under `set -e` — which is exactly how the first
+      # build of this VM failed. The alias dir is a plain path and always
+      # correct. (The original Dockerfile did the same thing with ENV PATH.)
+      export PATH="$FNM_DIR/aliases/default/bin:$PNPM_HOME/bin:$FNM_DIR:$PATH"
 
       # --- pnpm, standalone ---------------------------------------------------
       # Self-contained, not tied to a Node install, so an fnm patch bump won't
@@ -337,7 +364,7 @@ provision:
             echo 'export FNM_DIR="$HOME/.fnm"'
             echo 'export PNPM_HOME="$HOME/.local/share/pnpm"'
             echo 'export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"'
-            echo 'eval "$(fnm env)"'
+            echo "eval \"\$(fnm env --shell ${shell})\""
             echo 'export OPENSPEC_TELEMETRY=0'
             echo ''
             echo '# Layer 4 of the pnpm guard, and the only one that fires before'
