@@ -10,7 +10,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  all 40 repos
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node 26.7.0, pnpm 12.4.2, OpenSpec
-├── Browser → localhost:5173           ├── Temurin 25 (+21), Playwright
+├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright
 ├── Xcode / iOS Simulator              ├── Docker → supabase-local-platform
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -50,9 +50,8 @@ Verify:
 limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; java -version; docker run --rm hello-world'
 ```
 
-`java -version` must report **25**. Two JDKs are installed and Debian
-alternatives prefer the highest available, so this is worth actually reading
-rather than glancing at.
+`java -version` must report **25**. Two JDKs are installed, so this is worth
+actually reading rather than glancing at.
 
 ## WebStorm
 
@@ -110,6 +109,35 @@ Not a bug, but worth deciding about rather than inheriting.
 limactl copy -r ~/projects/current/bank-core dev:/home/$USER/projects/current/
 ```
 
+## JVM versions
+
+SDKMAN owns every JDK; apt owns none. Same division as Node, where fnm owns the versions — one authority per language, so "which java is this?" has one answer.
+
+```bash
+sdk list java              # what is available
+sdk install java 17.0.x-tem
+sdk default java 25.0.4-tem   # moves the machine default, scripts included
+sdk current java
+```
+
+`sdk default` repoints `~/.sdkman/candidates/java/current`, which is what `JAVA_HOME` in `/etc/environment` targets — so it changes the default for non-interactive shells too, from one place.
+
+**Per project**, commit a `.sdkmanrc`:
+
+```
+java=21.0.12-tem
+```
+
+`sdkman_auto_env=true` is set, so `cd` into that directory switches the JDK. This is **interactive only** — it hooks `PROMPT_COMMAND`, so scripts and agent-run commands never see it.
+
+For non-interactive correctness, **Gradle toolchains are the mechanism**, not `.sdkmanrc`:
+
+```kotlin
+kotlin { jvmToolchain(21) }
+```
+
+Gradle discovers every SDKMAN-installed JDK from the candidates directory, so a declared toolchain resolves without auto-provisioning a download mid-build.
+
 ## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
@@ -133,7 +161,8 @@ This bumps all ~40 projects at once. That is the intent, and also the risk — i
 - **Sizing.** 6 CPU / 14 GB, up from 4/12, because the VM now runs a full IDE backend alongside the agent and the builds. JetBrains asks 2+ cores and 4 GB+ for the backend alone. This is the first knob to turn if it feels tight.
 - **Disk: 60 GiB against a measured ~20 GB peak.** All 32 repos are 0.24 GB of tracked source plus git history; the weight is the pnpm store (~4.5 GB), Supabase's Docker images (~4 GB) and the IDE's indexes (~4 GB). `node_modules` is nearly free because pnpm hardlinks into the store on ext4 — except for the ~6 repos still on npm/yarn, which write flat duplicated trees with no dedup. Sparse, so the ceiling is not a reservation, but the image only ever grows: with ~77 GB free on the host, a ceiling above that would let a runaway build fill the macOS boot volume. Growing a Lima disk later works; shrinking does not.
 - **No host mounts.** `mounts: []`. Moving files: `limactl copy`, or git. See **WebStorm** above for why.
-- **Java is the exception to "one version".** `JAVA_VERSIONS: "25 21"` — 25 is the default, 21 is present because several `laptime-insights` modules pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail. Drop 21 once nothing asks for it.
+- **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because several `laptime-insights` modules pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
+- **`java` must agree across shell modes.** `/etc/environment` puts `JAVA_HOME` and a `java` entry at the **tail** of `PATH`. The tail position is load-bearing: `sdkman-init` prepends its own entry in interactive shells and `sdk use`/`sdk env` rewrites *that* one, so a `java` ahead of it wins and silently breaks per-project switching — `sdk env` reports 21 while `java -version` still says 25.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
 - **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.

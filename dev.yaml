@@ -133,14 +133,17 @@ param:
   PNPM_VERSION: "12.4.2"
   OPENSPEC_VERSION: "1.9.0"
   SUPABASE_CLI_VERSION: "2.115.0"
-  # Java is the one place "one version for everything" doesn't hold. Gradle
-  # toolchains are a declared per-project requirement, not a preference: the
-  # laptime-insights modules pin jvmToolchain(21), and with only 25 present
-  # Gradle either auto-provisions a JDK mid-build or fails outright. Temurin
-  # co-installs cleanly from apt, so both are here and 25 is the default.
-  # Drop 21 from this list once nothing asks for it.
-  JAVA_VERSIONS: "25 21"
-  JAVA_DEFAULT: "25"
+  # JVM versions come from SDKMAN, not apt — the same division as Node, where
+  # fnm owns every version and apt owns none. SDKMAN identifiers, so a bump
+  # means editing these two lines.
+  #
+  # Java is the one place "one version for everything" doesn't hold: Gradle
+  # toolchains are a declared per-project requirement, not a preference. The
+  # laptime-insights modules pin jvmToolchain(21), and with only 25 installed
+  # Gradle either auto-provisions mid-build or fails. Gradle discovers both
+  # from SDKMAN's candidates directory, so no auto-provisioning happens.
+  JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"
+  JAVA_DEFAULT: "25.0.4-tem"
 
 provision:
   # ---------------------------------------------------------------------------
@@ -159,7 +162,7 @@ provision:
       # stop working once a database is shared across apps' migration
       # histories). Ported as-is from homefleet's Dockerfile.
       apt-get install -y --no-install-recommends \
-        ca-certificates curl git gnupg unzip zsh ripgrep jq less \
+        ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
         build-essential postgresql-client
 
       # --- JetBrains remote backend prerequisites -----------------------------
@@ -188,20 +191,10 @@ provision:
         524288 512 > /etc/sysctl.d/60-jetbrains-inotify.conf
       sysctl -p /etc/sysctl.d/60-jetbrains-inotify.conf
 
-      # --- Java: Eclipse Temurin via the Adoptium apt repo --------------------
-      # Temurin specifically, not openjdk: matches what CI's actions/setup-java
-      # uses. Needed for the Serenity BDD report generator CLI, which
-      # @serenity-js/serenity-bdd invokes — it ships its own jar but still needs
-      # `java` on PATH — and for the Kotlin/Gradle projects.
-      # GONE: the devcontainer java Feature, and with it the `jdkDistro: tem`
-      # workaround (the Feature's version regex couldn't parse Microsoft's
-      # `21.0.12+1-ms` identifiers, so a bare "version": "21" failed the build).
-      # apt has no such parsing problem.
-      install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
-        | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
-      echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
-        > /etc/apt/sources.list.d/adoptium.list
+      # GONE: Eclipse Temurin from the Adoptium apt repo, and with it the
+      # `jdkDistro: tem` devcontainer-Feature workaround. JVM versions are
+      # SDKMAN's job now (user provision step below) — `zip` above is its one
+      # extra dependency, and omitting it is what made the first attempt fail.
 
       # --- Docker Engine, native ---------------------------------------------
       # Not Docker Desktop: no licence question, no 47GB VM-inside-a-VM, and
@@ -214,47 +207,25 @@ provision:
 
       apt-get update
 
-      jdk_pkgs=()
-      for v in ${PARAM_JAVA_VERSIONS}; do jdk_pkgs+=("temurin-${v}-jdk"); done
       apt-get install -y --no-install-recommends \
-        "${jdk_pkgs[@]}" \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-      # Default JDK. The Temurin debs register alternatives at every priority,
-      # so without pinning, `java` resolves to the HIGHEST version installed —
-      # which happens to be right today and would silently become wrong the
-      # moment a newer JDK is added to JAVA_VERSIONS for some project's
-      # toolchain. Pin it explicitly.
-      JAVA_HOME_DEFAULT="/usr/lib/jvm/temurin-${PARAM_JAVA_DEFAULT}-jdk-arm64"
-      [ -d "$JAVA_HOME_DEFAULT" ] || { echo "no such JDK: $JAVA_HOME_DEFAULT"; exit 1; }
-      for tool in java javac jar javadoc jshell; do
-        [ -x "$JAVA_HOME_DEFAULT/bin/$tool" ] \
-          && update-alternatives --set "$tool" "$JAVA_HOME_DEFAULT/bin/$tool" || true
-      done
-      # Gradle finds the non-default JDKs here without auto-provisioning.
-      echo "JAVA_HOME=$JAVA_HOME_DEFAULT" >> /etc/environment
-
-      # --- PATH for NON-interactive shells ------------------------------------
-      # The ~/.bashrc block below only runs in interactive shells: Ubuntu's
-      # stock .bashrc returns early when $- has no `i`, so `ssh host "node -v"`
-      # and any script-driven command would not find node/pnpm. PAM reads
-      # /etc/environment for every session regardless of shell mode, so the
-      # toolchain goes here too. No variable expansion is possible in this
-      # file, hence the absolute paths derived from uid 1000's home.
-      printf 'PATH="%s/.fnm/aliases/default/bin:%s/.local/share/pnpm/bin:%s/.fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' \
-        "$LOGIN_HOME" "$LOGIN_HOME" "$LOGIN_HOME" >> /etc/environment
-
-      # The login user is NOT uid 1000: Lima carries the host's uid into the
-      # guest (501 on macOS), and the home directory is <name>.guest. Lima 2.x
-      # also warns against referencing LIMA_CIDATA_*, so identify the user by
-      # scanning /etc/passwd for the first non-system account under /home.
-      LOGIN_USER="$(awk -F: '$3>=500 && $3<65000 && $6 ~ /^\/home\// {print $1; exit}' /etc/passwd)"
-      LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
-      [ -n "$LOGIN_USER" ] && [ -d "$LOGIN_HOME" ] \
-        || { echo "could not identify the login user" >&2; exit 1; }
 
       usermod -aG docker "$LOGIN_USER"
       systemctl enable --now docker
+
+      # --- JAVA_HOME / PATH for non-interactive shells ------------------------
+      # Points at SDKMAN's `current` symlink, so `sdk default java <v>` moves
+      # the machine default for scripts too — one place to change it.
+      #
+      # The java entry goes LAST in PATH, deliberately. sdkman-init prepends
+      # its own candidates entry in interactive shells and `sdk use` / `sdk env`
+      # rewrites that one; a java entry ahead of it wins and silently breaks
+      # per-project switching (observed: `sdk env` reported 21 while `java
+      # -version` still said 25). At the tail it only serves non-interactive
+      # shells, which have no sdk function anyway.
+      echo "JAVA_HOME=\"$LOGIN_HOME/.sdkman/candidates/java/current\"" >> /etc/environment
+      printf 'PATH="%s/.fnm/aliases/default/bin:%s/.local/share/pnpm/bin:%s/.fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%s/.sdkman/candidates/java/current/bin"\n' \
+        "$LOGIN_HOME" "$LOGIN_HOME" "$LOGIN_HOME" "$LOGIN_HOME" >> /etc/environment
 
       # --- Supabase CLI -------------------------------------------------------
       # Static binary, not a global npm install (which Supabase deprecates).
@@ -374,7 +345,6 @@ provision:
             echo '# Scoped to install-type commands and only where a pnpm lockfile is'
             echo '# present, so `npm install -g` and the genuinely-npm repos still work.'
             echo 'npm() { case "$1" in install|i|ci|add|update) if [ -f pnpm-lock.yaml ]; then printf "%s\n" "pnpm-lock.yaml present - use pnpm, not npm" >&2; return 1; fi ;; esac; command npm "$@"; }'
-            echo "export JAVA_HOME=/usr/lib/jvm/temurin-${PARAM_JAVA_DEFAULT}-jdk-arm64"
           } >> "$rc"
         fi
       done
@@ -382,6 +352,58 @@ provision:
       # Where the repos get cloned. Mirrors the host layout out of habit, so
       # paths read the same in notes and commit messages.
       mkdir -p "$HOME/projects/current"
+
+  # ---------------------------------------------------------------------------
+  # USER: SDKMAN + the JVM versions. Separate step so a slow JDK download
+  # cannot take the JS toolchain down with it.
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export SDKMAN_DIR="$HOME/.sdkman"
+
+      # rcupdate=false: the installer would otherwise append its own init to
+      # the rc files, and the shell wiring is written in one place below.
+      if [ ! -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]; then
+        curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash
+      fi
+
+      # sdkman-init trips `set -u`, so relax it just for the source.
+      set +u
+      source "$SDKMAN_DIR/bin/sdkman-init.sh"
+      set -u
+
+      # Non-interactive: answer the "set as default?" prompt from stdin.
+      for v in ${PARAM_JAVA_VERSIONS}; do
+        if [ ! -d "$SDKMAN_DIR/candidates/java/$v" ]; then
+          sdk install java "$v" < /dev/null
+        fi
+      done
+      # Explicit, because SDKMAN makes the FIRST install its default — which
+      # would leave interactive shells on 21 while /etc/environment pointed
+      # non-interactive ones at 25.
+      sdk default java "${PARAM_JAVA_DEFAULT}" < /dev/null
+
+      # `cd` into a directory holding .sdkmanrc switches the JDK. Interactive
+      # shells only — it hooks PROMPT_COMMAND, so scripts never see it. For
+      # non-interactive correctness Gradle toolchains are the mechanism, and
+      # they find every version above in SDKMAN's candidates directory.
+      sed -i 's/^sdkman_auto_env=false/sdkman_auto_env=true/' "$SDKMAN_DIR/etc/config"
+
+      for shell in bash zsh; do
+        rc="$HOME/.${shell}rc"
+        touch "$rc"
+        grep -q 'sdkman-init' "$rc" && continue
+        {
+          echo ''
+          echo '# --- sdkman (JVM versions) ---'
+          echo '# Last on purpose: sdkman-init prepends its candidates to PATH.'
+          echo 'export SDKMAN_DIR="$HOME/.sdkman"'
+          echo '[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && source "$SDKMAN_DIR/bin/sdkman-init.sh"'
+        } >> "$rc"
+      done
 
   # ---------------------------------------------------------------------------
   # USER: Playwright browsers. Separate step so a flaky download can't take the
@@ -410,7 +432,10 @@ probes:
       timeout 300s bash -c 'until command -v docker >/dev/null; do sleep 3; done'
       # Assert the DEFAULT jdk, not merely that some java exists: two JDKs are
       # installed and alternatives silently prefer the highest.
-      java -version 2>&1 | grep -q "\"${PARAM_JAVA_DEFAULT}\\." 
+      # PARAM_JAVA_DEFAULT is an SDKMAN identifier (25.0.4-tem); java -version
+      # prints 25.0.4, so compare the major only.
+      timeout 600s bash -c 'until [ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]; do sleep 5; done'
+      java -version 2>&1 | grep -q "\"${PARAM_JAVA_DEFAULT%%.*}\\." 
     hint: "Toolchain did not provision. Check: limactl shell dev -- sudo journalctl -u cloud-final"
   - description: "IDE backend prerequisites"
     script: |
