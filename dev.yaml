@@ -165,6 +165,36 @@ provision:
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
         build-essential postgresql-client
 
+      # --- Electron -----------------------------------------------------------
+      # logbook and markdown-navigator are Electron apps, and logbook runs its
+      # unit tests INSIDE Electron (scripts/vitest-under-electron.mjs) plus
+      # Playwright e2e against a packaged build — so Electron has to launch
+      # here, not merely compile.
+      #   xvfb      : a virtual display; there is no real one in this VM
+      #   fakeroot  : electron-builder needs it for Linux (deb) targets
+      # Playwright's own --with-deps covers some of these, but only some, and
+      # it is a best-effort step — do not rely on it for Electron.
+      apt-get install -y --no-install-recommends \
+        libgtk-3-0t64 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
+        libatspi2.0-0t64 libdrm2 libgbm1 libasound2t64 libcups2t64 \
+        libpango-1.0-0 libcairo2 libx11-xcb1 libxcomposite1 libxdamage1 \
+        libxrandr2 libxkbcommon0 xvfb fakeroot
+
+      # Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor,
+      # which breaks Chromium's and Electron's sandbox: the launch aborts with
+      # "The SUID sandbox helper binary was found, but is not configured
+      # correctly ... chrome-sandbox is owned by root and has mode 4755".
+      #
+      # Allowing unprivileged userns fixes it with the sandbox left ON. The
+      # alternatives are worse: --no-sandbox disables a real security boundary,
+      # and chown/chmod of chrome-sandbox has to be redone after every
+      # node_modules install. Guarded, since the knob only exists on 23.10+.
+      if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+        echo 'kernel.apparmor_restrict_unprivileged_userns = 0' \
+          > /etc/sysctl.d/61-electron-userns.conf
+        sysctl -p /etc/sysctl.d/61-electron-userns.conf
+      fi
+
       # --- JetBrains remote backend prerequisites -----------------------------
       # Gateway downloads and runs the WebStorm backend itself (into
       # ~/.cache/JetBrains), so there is nothing to install for the IDE as
@@ -414,8 +444,10 @@ provision:
       #!/bin/bash
       set -uo pipefail
       export FNM_DIR="$HOME/.fnm"
-      export PATH="$FNM_DIR:$HOME/.local/share/pnpm/bin:$PATH"
-      eval "$("$FNM_DIR/fnm" env)"
+      # Deterministic path, not `eval "$(fnm env)"` — see the note in the
+      # toolchain step. This step failed the first build for exactly that
+      # reason: "npx: command not found", so no browsers were installed.
+      export PATH="$FNM_DIR/aliases/default/bin:$HOME/.local/share/pnpm/bin:$FNM_DIR:$PATH"
 
       sudo env "PATH=$PATH" npx --yes playwright install-deps chromium \
         || echo "! playwright OS deps skipped"
@@ -445,6 +477,15 @@ probes:
       test "$(sysctl -n fs.inotify.max_user_watches)" -ge 524288
       ldconfig -p | grep -q libXext
     hint: "IDE prerequisites missing. Gateway may connect and then drop the backend."
+  - description: "Electron prerequisites"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      command -v xvfb-run
+      ldconfig -p | grep -q libgtk-3
+      # Without this, Electron aborts on the SUID sandbox helper.
+      test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" -eq 0
+    hint: "Electron will not launch. Check xvfb, libgtk-3 and the userns sysctl."
 
 message: |
   Dev VM is up.

@@ -10,7 +10,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  all 40 repos
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node 26.7.0, pnpm 12.4.2, OpenSpec
-├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright
+├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright, Electron
 ├── Xcode / iOS Simulator              ├── Docker → supabase-local-platform
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -168,6 +168,31 @@ kotlin { jvmToolchain(21) }
 ```
 
 Gradle discovers every SDKMAN-installed JDK from the candidates directory, so a declared toolchain resolves without auto-provisioning a download mid-build.
+
+## Electron
+
+`logbook` and `markdown-navigator` are Electron apps, and `logbook` runs its unit tests *inside* Electron (`scripts/vitest-under-electron.mjs`) plus Playwright e2e against a packaged build — so Electron has to launch here, not merely compile.
+
+Three things make that work, all provisioned:
+
+- **The GTK/X/NSS runtime libraries.** Playwright's `--with-deps` covers some of them but not all, and it is a best-effort step, so Electron's set is installed explicitly.
+- **`xvfb`.** There is no display in this VM. Run anything that opens a window under `xvfb-run -a …`.
+- **`kernel.apparmor_restrict_unprivileged_userns = 0`.** Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor, which breaks Electron's sandbox:
+
+  ```
+  FATAL:setuid_sandbox_host.cc] The SUID sandbox helper binary was found, but
+  is not configured correctly. Rather than run without sandboxing I'm aborting
+  now. You need to make sure that .../chrome-sandbox is owned by root and has
+  mode 4755.
+  ```
+
+  Allowing unprivileged userns fixes this **with the sandbox left on**. The two common alternatives are worse: `--no-sandbox` turns off a real security boundary, and `chown root:root` + `chmod 4755` on `chrome-sandbox` has to be redone after every `node_modules` install.
+
+Verified in this VM: `xvfb-run -a electron main.js` → `ELECTRON OK 44.7.0 chrome 152.0.7977.130`, sandbox enabled.
+
+### What cannot move here
+
+`markdown-navigator/apps/desktop` builds with `electron-builder --mac`, which needs macOS — codesigning and `.dmg` creation are not available on Linux. **That build stays on the host**, alongside Xcode. `logbook` packages with a bare `electron-builder --dir`, so in the VM it produces a *Linux* build rather than the macOS one the host produced; fine for tests, worth knowing when comparing artefacts. Per-OS release builds remain CI's job.
 
 ## The rule
 
