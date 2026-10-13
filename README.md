@@ -53,6 +53,37 @@ limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; java -versi
 `java -version` must report **25**. Two JDKs are installed, so this is worth
 actually reading rather than glancing at.
 
+## Getting a shell in the VM
+
+Three ways in, all equivalent once `bootstrap.sh` has run:
+
+```bash
+ssh lima-dev          # via the ~/.ssh/config block bootstrap.sh writes
+limactl shell dev     # Lima's own, no SSH config needed
+```
+
+**Claude Code desktop app:** environment dropdown → **+ Add SSH connection** → SSH Host `lima-dev`, leaving port and identity file empty so they come from `~/.ssh/config`. Claude Code installs itself on the VM on first connect.
+
+**WebStorm** connects over the same SSH host via Gateway — see below.
+
+### Two things that will catch you out
+
+**The SSH port changes when the VM restarts.** Lima picks a new forwarded port each time, so the `~/.ssh/config` block goes stale and `ssh lima-dev` fails with `Connection refused`. Re-run `./bootstrap.sh` (idempotent — it rewrites the block), or just:
+
+```bash
+limactl show-ssh dev --format=config    # shows the current port
+```
+
+A saved connection in the desktop app or Gateway will need the same refresh. `limactl shell dev` is unaffected, which makes it the better choice when something looks broken.
+
+**Lima multiplexes SSH through a control master,** so a connection can outlive a change you just made inside the VM. Group membership is the usual victim: after provisioning added the login user to `docker`, every `docker` command still failed with `permission denied` because the session predated it. Drop the shared connection and reconnect:
+
+```bash
+ssh -O exit lima-dev
+```
+
+The same applies to anything PAM reads at session start — `/etc/environment`, so `JAVA_HOME` and `PATH`. If an environment change seems not to have taken effect, you are probably still on the old connection rather than looking at a real bug.
+
 ## WebStorm
 
 ```bash
