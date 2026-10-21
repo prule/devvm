@@ -138,7 +138,7 @@ param:
   # renovate: datasource=npm depName=pnpm
   PNPM_VERSION: "12.4.2"
   # renovate: datasource=npm depName=@fission-ai/openspec
-  OPENSPEC_VERSION: "1.9.0"
+  OPENSPEC_VERSION: "1.14.3"
   # renovate: datasource=github-releases depName=supabase/cli extractVersion=^v(?<version>.*)$
   SUPABASE_CLI_VERSION: "2.115.0"
   # The `skills` CLI (npx skills add ...) that installs Claude Code skills.
