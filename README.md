@@ -1,4 +1,4 @@
-x# devvm
+# devvm
 
 One Linux VM for every project, driven by the Claude Code desktop app over SSH.
 
@@ -9,7 +9,7 @@ Replaces the per-project `.devcontainer/` setup. Rationale and trade-offs:
 macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  all 40 repos
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
-│   (thin client only)                 ├── Node 26.7.0, pnpm 12.4.2, OpenSpec
+│   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 ├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright, Electron
 ├── Xcode / iOS Simulator              ├── Docker → supabase-local-platform
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
@@ -27,6 +27,7 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 | `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
 | `clone-all.sh` | Run in the VM. Clones every project from the manifest, adds the worktrees, warns about what git does not cover. |
 | `migrate-repo.sh` | Run in the VM, once per repo. Drops `.devcontainer/`, pins Node, installs deps. |
+| `renovate.json` | Tells Renovate how to find the version pins in `dev.yaml`. See **Bumping the toolchain**. |
 
 ## Quickstart
 
@@ -211,6 +212,24 @@ limactl stop dev && limactl delete dev && ./bootstrap.sh
 ```
 
 This bumps all ~40 projects at once. That is the intent, and also the risk — it's the cost of dropping per-repo Dockerfiles. Do it deliberately, not incidentally.
+
+### Renovate
+
+[Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI or the `skills` CLI. It needs the Renovate GitHub App installed on this repo.
+
+Each pin in `param:` has a comment directly above it that tells Renovate where to look:
+
+```yaml
+  # renovate: datasource=npm depName=pnpm
+  PNPM_VERSION: "12.4.2"
+```
+
+A regex custom manager in `renovate.json` matches every such pair. To track a new tool, add a `param:` value with a `# renovate:` line above it. Use any [datasource](https://docs.renovatebot.com/modules/datasource/), and add `extractVersion=` if the release tags have a prefix (see `SUPABASE_CLI_VERSION`). The comment must be on the line immediately above the value. If it isn't, Renovate silently skips that pin; nothing errors.
+
+- **Minor and patch updates** open PRs on their own.
+- **Major updates** wait on the Dependency Dashboard issue, and Renovate opens the PR only after you tick the box. A major Node or pnpm bump hits every project, so it should be a decision.
+- **Java is not covered.** `JAVA_VERSIONS` holds SDKMAN identifiers (`25.0.4-tem`), and Renovate has no SDKMAN datasource. Bump these by hand.
+- **Merging does not touch the running VM.** The new version arrives the next time you rebuild with the commands above.
 
 ## Gotchas
 

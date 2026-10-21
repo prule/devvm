@@ -128,16 +128,25 @@ portForwards:
 # `set -u` every reference below would abort the provision as an unbound
 # variable. `param:` is the one that reaches provision scripts and probes,
 # exposed there as $PARAM_<Key>.
+#
+# Renovate bumps every value with a `# renovate:` line directly above it (see
+# renovate.json). Keep that line adjacent to its value, or Renovate stops
+# matching it and the pin goes quiet rather than failing.
 param:
+  # renovate: datasource=node-version depName=node
   NODE_VERSION: "26.7.0"
+  # renovate: datasource=npm depName=pnpm
   PNPM_VERSION: "12.4.2"
+  # renovate: datasource=npm depName=@fission-ai/openspec
   OPENSPEC_VERSION: "1.9.0"
+  # renovate: datasource=github-releases depName=supabase/cli extractVersion=^v(?<version>.*)$
   SUPABASE_CLI_VERSION: "2.115.0"
   # The `skills` CLI (npx skills add ...) that installs Claude Code skills.
+  # renovate: datasource=npm depName=skills
   SKILLS_CLI_VERSION: "1.7.4"
   # JVM versions come from SDKMAN, not apt — the same division as Node, where
   # fnm owns every version and apt owns none. SDKMAN identifiers, so a bump
-  # means editing these two lines.
+  # means editing these two lines — by hand: Renovate has no SDKMAN datasource.
   #
   # Java is the one place "one version for everything" doesn't hold: Gradle
   # toolchains are a declared per-project requirement, not a preference. The

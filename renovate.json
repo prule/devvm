@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "description": "Toolchain pins in dev.yaml, each annotated with a `# renovate:` comment",
+      "customType": "regex",
+      "managerFilePatterns": ["/^dev\\.yaml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( extractVersion=(?<extractVersion>\\S+))?\\s+\\w+: \"(?<currentValue>[^\"]+)\""
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "A major bump changes all ~40 projects at once; open it only when asked from the Dependency Dashboard",
+      "matchFileNames": ["dev.yaml"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
