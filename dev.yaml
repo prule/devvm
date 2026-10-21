@@ -134,7 +134,7 @@ portForwards:
 # matching it and the pin goes quiet rather than failing.
 param:
   # renovate: datasource=node-version depName=node
-  NODE_VERSION: "26.7.0"
+  NODE_VERSION: "26.12.1"
   # renovate: datasource=npm depName=pnpm
   PNPM_VERSION: "12.14.0"
   # renovate: datasource=npm depName=@fission-ai/openspec
