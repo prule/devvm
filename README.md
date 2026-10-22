@@ -99,6 +99,23 @@ It is also why there is no shared folder. A writable mount of `~/projects/curren
 
 `dev.yaml` provisions the two things the backend needs from the OS: a few X/font libraries, and `fs.inotify.max_user_watches = 524288` (below roughly that, the IntelliJ platform stops watching files and falls back to recursive rescans).
 
+## VS Code (browsing and copying files)
+
+There is no shared folder, so moving files between the Mac and the VM needs a client on the Mac. VS Code's Remote-SSH gives you a file tree you can drag and drop into.
+
+```bash
+brew install --cask visual-studio-code
+```
+
+Install the **Remote - SSH** extension (Microsoft), then ⇧⌘P → **Remote-SSH: Connect to Host…** → `lima-dev` → **Linux**. It installs its server in the VM on first connect. **File → Open Folder…** → `~/projects/current/`.
+
+- **Mac → VM:** drag files from Finder into the Explorer sidebar.
+- **VM → Mac:** right-click → **Download…**
+
+**Docker containers:** while connected, install the **Container Tools** extension (it installs on the VM side). Expand a running container → **Files** to browse it and download files from it. If it reports `permission denied` on Docker, the VS Code server predates the `docker` group change. Run **Remote-SSH: Kill VS Code Server on Host…** and reconnect.
+
+The SSH port gotcha above applies here too: after a VM restart, re-run `./bootstrap.sh` before reconnecting.
+
 ## Checking out the projects
 
 `clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`.
