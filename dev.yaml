@@ -481,9 +481,11 @@ provision:
       # Deterministic path, not `eval "$(fnm env)"` — see the toolchain step.
       export PATH="$FNM_DIR/aliases/default/bin:$HOME/.local/share/pnpm/bin:$FNM_DIR:$PATH"
 
-      # "<github owner/repo> <skill name>", one per line.
+      # "<github owner/repo> <skill name>", one per line. Every skill in the
+      # repo is installed; the name is only the "already there?" sentinel.
       skills='
       danyuchn/asd-ste100-skill asd-ste100
+      mattpocock/skills setup-matt-pocock-skills
       '
       echo "$skills" | while read -r repo name; do
         [ -n "$repo" ] || continue
