@@ -286,6 +286,37 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.
 - **Xcode / iOS stays on the host.** Nothing simulator-related can move into the VM.
 
+## Why not one devcontainer with everything mounted?
+
+The obvious alternative is one devcontainer for every project, with `~/projects/current` bind-mounted from the Mac. Isolation is the same: one container for everything is no more separated than one VM. The difference is where the files live. On macOS a container already runs inside Docker Desktop's Linux VM, so the two shapes are:
+
+```
+devcontainer + mount:  macOS (APFS) ──virtiofs──► Docker Desktop VM ──► container ──► tools
+this repo:                                        Lima VM (ext4) ────────────────────► tools
+```
+
+What the mount costs:
+
+- **Speed.** `pnpm install`, `node_modules`, `git status` and builds are all small-file workloads, and every one crosses virtiofs.
+- **File watching.** inotify events across the mount are unreliable, so Vite, Jest and the IntelliJ indexer miss changes or fall back to polling.
+- **`node_modules` on both sides.** See **WebStorm** above. The per-project volume fix leaves the host IDE unable to resolve imports.
+- **pnpm can't hardlink** across filesystems, so it copies from the store instead. The disk budget in `dev.yaml` assumes hardlinks.
+- **Case-insensitive APFS** under tools that assume Linux semantics.
+- **Docker inside Docker.** Supabase needs a daemon. Docker-in-Docker is heavy. With a mounted host socket, bind-mount paths inside the container don't match what the daemon sees. In the VM, Docker is just Docker.
+- **Kernel settings aren't yours.** `fs.inotify.max_user_watches` and systemd belong to Docker Desktop's VM, not the container.
+- **Connecting is harder.** The Claude Code desktop app and Gateway speak SSH to a VM natively. A container needs an sshd or a devcontainer-aware client.
+
+What the mount gives you that this setup does not:
+
+- **Files on the Mac.** Time Machine, Finder and Xcode see them directly. Here `~/.lima` is excluded from Time Machine, so code is only safe once pushed, which is why `not-in-git.txt` exists.
+- **Disposability.** Rebuilding a container is routine. This VM has no snapshots, and recovery is a reprovision that is only as good as `dev.yaml`.
+- **Portability.** A `devcontainer.json` also runs in Codespaces or CI. `dev.yaml` is Lima-only.
+- **No file-copying step.** Here that needs `limactl copy` or VS Code (see above).
+
+Putting the projects in a named Docker volume instead of a mount removes the mount costs, but it also hides the files from the Mac. That leaves you with this VM plus a container layer and Docker Desktop, and Docker-in-Docker is still awkward.
+
+For this workload (Node and pnpm, Supabase in Docker, IDE backends that want local disk), the mount hurts most, so the files live in the VM.
+
 ## What this deleted
 
 Seven `.devcontainer/` directories (~1,500 lines), seven `docs/DevContainers.md`, Docker Desktop (~47 GB), and every workaround that existed only because the environments were separate: `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`, `PLAYWRIGHT_SKIP_BROWSER_GC`, `--add-host=host.docker.internal`, the shared `/cache` volume convention, the `pnpm config set store-dir` double-write under two `XDG_CONFIG_HOME` values, and the "never mount a volume at `PNPM_HOME`" rule.
