@@ -213,6 +213,30 @@ limactl stop dev && limactl delete dev && ./bootstrap.sh
 
 This bumps all ~40 projects at once. That is the intent, and also the risk — it's the cost of dropping per-repo Dockerfiles. Do it deliberately, not incidentally.
 
+### Applying a `dev.yaml` change without a rebuild
+
+Lima runs the provision scripts on **every boot**, not only on create, so a restart is enough for an additive change such as a new entry in the skills list. It is the cheap path: the existing disk, clones and logins survive.
+
+The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, which was taken from `dev.yaml` when the VM was created. Editing `dev.yaml` here changes nothing until that copy is replaced. On the host:
+
+```bash
+git pull
+limactl stop dev
+cp dev.yaml ~/.lima/dev/lima.yaml
+limactl start dev
+./bootstrap.sh    # the SSH port changed with the restart
+```
+
+Each provision step skips work it already did (the skills step skips any skill whose `SKILL.md` exists), so a restart re-runs them quickly. Check the result:
+
+```bash
+limactl shell dev -- ls ~/.claude/skills
+```
+
+A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
+
+Use the full rebuild above instead when a change is not additive: removing a package, changing a version pin, or changing the disk.
+
 ### Renovate
 
 [Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI or the `skills` CLI. It needs the Renovate GitHub App installed on this repo.
