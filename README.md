@@ -194,7 +194,7 @@ Gradle discovers every SDKMAN-installed JDK from the candidates directory, so a 
 Three things make that work, all provisioned:
 
 - **The GTK/X/NSS runtime libraries.** Playwright's `--with-deps` covers some of them but not all, and it is a best-effort step, so Electron's set is installed explicitly.
-- **`xvfb`.** There is no display in this VM. Run anything that opens a window under `xvfb-run -a …`.
+- **`xvfb`.** There is no physical display in this VM. Run tests and anything else that opens a window you don't need to see under `xvfb-run -a …`. To *watch* an app, see **Seeing the window** below.
 - **`kernel.apparmor_restrict_unprivileged_userns = 0`.** Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor, which breaks Electron's sandbox:
 
   ```
@@ -207,6 +207,39 @@ Three things make that work, all provisioned:
   Allowing unprivileged userns fixes this **with the sandbox left on**. The two common alternatives are worse: `--no-sandbox` turns off a real security boundary, and `chown root:root` + `chmod 4755` on `chrome-sandbox` has to be redone after every `node_modules` install.
 
 Verified in this VM: `xvfb-run -a electron main.js` → `ELECTRON OK 44.7.0 chrome 152.0.7977.130`, sandbox enabled.
+
+### Seeing the window
+
+`xvfb-run` makes a throwaway display that nobody can see. For looking at an app, `dev.yaml` also runs a persistent one: Xvfb on display `:99` (1920×1080), served over VNC by x11vnc. Two systemd units, `devvm-display` and `devvm-vnc`, start on boot.
+
+Start the app on that display. `DISPLAY` is set per command on purpose (see below):
+
+```bash
+DISPLAY=:99 pnpm dev        # or: DISPLAY=:99 npx electron .
+```
+
+Then on the Mac, Finder → **Go → Connect to Server…** (⌘K) → `vnc://localhost:5901`. That opens macOS's built-in Screen Sharing. It asks for a password, which provisioning generated:
+
+```bash
+ssh lima-dev cat .vnc/password.txt
+```
+
+How it is set up:
+
+- **Port 5901, not 5900.** The Mac's own Screen Sharing server owns 5900 when it is turned on.
+- **x11vnc listens on the VM's localhost only** (`-localhost`). The `portForwards` entry is what makes it reachable from the Mac, and only from the Mac's localhost. The password exists because Screen Sharing insists on one; localhost is the real boundary.
+- **Tests don't land on it.** `xvfb-run -a` starts looking at `:99`, finds it taken and moves to `:100` and up, so test windows never appear on the screen you are watching.
+- **`DISPLAY` is not set machine-wide.** When `DISPLAY` is set and there is no tty, ssh tries to start an X askpass helper, which would break git over ssh in the agent's non-interactive shells. Opt in per command instead.
+- **There is no window manager.** Windows have no title bars and can't be moved or resized by dragging. That's fine for looking at one app. If it gets in the way, add one (for example `openbox`) to `dev.yaml` rather than installing it by hand.
+
+If Screen Sharing can't connect, check the services, and on the Mac check that the port is forwarded:
+
+```bash
+ssh lima-dev systemctl status devvm-display devvm-vnc
+lsof -iTCP:5901 -sTCP:LISTEN
+```
+
+Verified in this VM: `DISPLAY=:99 electron main.js` opens a visible 800×600 window, and x11vnc on `127.0.0.1:5901` answers `RFB 003.008` with password auth. Not yet verified: the Mac end, meaning Screen Sharing through Lima's forward. An existing VM picks all of this up, port forward included, through **Applying a `dev.yaml` change without a rebuild** below. The block is safe to run on every boot: it keeps an existing password and rewrites the units unchanged.
 
 ### What cannot move here
 

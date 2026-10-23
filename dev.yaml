@@ -105,7 +105,12 @@ containerd:
 # hardcode localhost — notably the Supabase CLI.
 #   5173 vite dev · 4173 vite preview · 5174 e2e's own vite dev
 #   54321 supabase api · 54322 db · 54323 studio · 54324 mailpit
+#   5901 x11vnc for display :99 — localhost-only by design, so it must be here
 portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [5901, 5901]
+    hostIP: "127.0.0.1"
+    hostPortRange: [5901, 5901]
   - guestIP: "127.0.0.1"
     guestPortRange: [5173, 5175]
     hostIP: "127.0.0.1"
@@ -166,6 +171,18 @@ provision:
       set -euo pipefail
 
       export DEBIAN_FRONTEND=noninteractive
+
+      # The login user is NOT uid 1000: Lima carries the host's uid into the
+      # guest (501 on macOS), and the home directory is <name>.guest. Lima 2.x
+      # also warns against referencing LIMA_CIDATA_*, so identify the user by
+      # scanning /etc/passwd for the first non-system account under /home.
+      # Defined first because Docker, /etc/environment and the VNC display
+      # below all need it, and under `set -u` a missing definition aborts.
+      LOGIN_USER="$(awk -F: '$3>=500 && $3<65000 && $6 ~ /^\/home\// {print $1; exit}' /etc/passwd)"
+      LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+      [ -n "$LOGIN_USER" ] && [ -d "$LOGIN_HOME" ] \
+        || { echo "could not identify the login user" >&2; exit 1; }
+
       apt-get update
 
       # postgresql-client: the migration scripts run raw SQL against the shared
@@ -205,6 +222,58 @@ provision:
           > /etc/sysctl.d/61-electron-userns.conf
         sysctl -p /etc/sysctl.d/61-electron-userns.conf
       fi
+
+      # --- A display you can look at ------------------------------------------
+      # xvfb-run gives tests a throwaway display nobody can see. To actually
+      # watch an Electron app, a persistent Xvfb runs on :99 and x11vnc serves
+      # it; macOS Screen Sharing connects via vnc://localhost:5901.
+      #   :99   : clear of xvfb-run -a, which counts up from :99 only if taken
+      #           — it is, so test runs land on :100+ and never on this screen
+      #   5901  : not 5900, which the Mac's own Screen Sharing server owns
+      #   -localhost : reachable only through Lima's forward (see portForwards)
+      # DISPLAY is deliberately NOT set machine-wide: with DISPLAY set and no
+      # tty, ssh (so git over ssh) reaches for an X askpass helper. Opt in per
+      # command with DISPLAY=:99.
+      #
+      # No window manager, so windows have no title bars and cannot be moved;
+      # fine for looking at one app. The password is a random 8 characters
+      # (the VNC limit) in ~/.vnc/password.txt — it is Screen Sharing that
+      # insists on one, and -localhost is the real boundary.
+      apt-get install -y --no-install-recommends x11vnc
+      vnc_dir="$LOGIN_HOME/.vnc"
+      if [ ! -s "$vnc_dir/passwd" ]; then
+        install -d -m 0700 -o "$LOGIN_USER" -g "$LOGIN_USER" "$vnc_dir"
+        pw="$(head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 8)"
+        printf '%s\n' "$pw" > "$vnc_dir/password.txt"
+        x11vnc -storepasswd "$pw" "$vnc_dir/passwd"
+        chown "$LOGIN_USER:$LOGIN_USER" "$vnc_dir/password.txt" "$vnc_dir/passwd"
+        chmod 0600 "$vnc_dir/password.txt" "$vnc_dir/passwd"
+      fi
+      printf '%s\n' \
+        '[Unit]' \
+        'Description=Persistent X display :99 for viewing GUI apps' \
+        '[Service]' \
+        "User=$LOGIN_USER" \
+        'ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp' \
+        'Restart=on-failure' \
+        '[Install]' \
+        'WantedBy=multi-user.target' \
+        > /etc/systemd/system/devvm-display.service
+      printf '%s\n' \
+        '[Unit]' \
+        'Description=VNC server for display :99' \
+        'BindsTo=devvm-display.service' \
+        'After=devvm-display.service' \
+        '[Service]' \
+        "User=$LOGIN_USER" \
+        "ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5901 -localhost -noipv6 -rfbportv6 -1 -forever -shared -rfbauth $vnc_dir/passwd" \
+        'Restart=on-failure' \
+        'RestartSec=2' \
+        '[Install]' \
+        'WantedBy=multi-user.target' \
+        > /etc/systemd/system/devvm-vnc.service
+      systemctl daemon-reload
+      systemctl enable --now devvm-display.service devvm-vnc.service
 
       # --- JetBrains remote backend prerequisites -----------------------------
       # Gateway downloads and runs the WebStorm backend itself (into
@@ -526,6 +595,13 @@ probes:
       # Without this, Electron aborts on the SUID sandbox helper.
       test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" -eq 0
     hint: "Electron will not launch. Check xvfb, libgtk-3 and the userns sysctl."
+  - description: "VNC display :99"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 120s bash -c 'until systemctl is-active --quiet devvm-vnc.service; do sleep 2; done'
+      timeout 30s bash -c 'until ss -ltn | grep -q "127.0.0.1:5901 "; do sleep 1; done'
+    hint: "No viewable display. Check: limactl shell dev -- systemctl status devvm-display devvm-vnc"
 
 message: |
   Dev VM is up.
