@@ -561,6 +561,34 @@ provision:
           || echo "! skill $name skipped — run 'npx skills add $repo -g -a claude-code' later"
       done
 
+  # ---------------------------------------------------------------------------
+  # USER: Claude Code plugins, user-level. The `claude` CLI does not exist yet
+  # at provision time (the desktop app installs it on first connect), so
+  # `claude plugin install` is not an option. Instead declare the marketplace
+  # and enable the plugin in ~/.claude/settings.json; Claude Code installs it
+  # from GitHub at its next start. Merged with jq so other settings survive.
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      settings="$HOME/.claude/settings.json"
+      mkdir -p "$HOME/.claude"
+      [ -s "$settings" ] || echo '{}' > "$settings"
+
+      # "<marketplace name> <github owner/repo> <plugin name>", one per line.
+      plugins='
+      sdlc-pipeline prule/sdlc-pipeline sdlc-pipeline
+      '
+      echo "$plugins" | while read -r market repo plugin; do
+        [ -n "$market" ] || continue
+        tmp="$(mktemp)"
+        jq --arg m "$market" --arg r "$repo" --arg p "$plugin@$market" '
+          .extraKnownMarketplaces[$m] = {source: {source: "github", repo: $r}}
+          | .enabledPlugins[$p] = true
+        ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+      done
+
 # --- Readiness ----------------------------------------------------------------
 probes:
   - description: "toolchain (node, pnpm, openspec, java, docker)"

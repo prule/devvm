@@ -330,6 +330,8 @@ limactl shell dev -- ls ~/.claude/skills
 
 A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
 
+Plugins (currently `sdlc-pipeline`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI is not installed until the desktop app first connects. Claude Code fetches them from GitHub at its next start. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add prule/sdlc-pipeline` and `claude plugin install sdlc-pipeline@sdlc-pipeline` there.
+
 Use the full rebuild above instead when a change is not additive: removing a package, changing a version pin, or changing the disk.
 
 ### Renovate
