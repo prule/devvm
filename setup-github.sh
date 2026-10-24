@@ -32,7 +32,7 @@ fi
 # Say yes when it offers to upload the public key above.
 gh auth status >/dev/null 2>&1 || gh auth login --git-protocol ssh --hostname github.com
 
-git config --global user.name  "$(gh api user  --jq .name  2>/dev/null || echo prule)"
+git config --global user.name  "$(gh api user  --jq '.name // .login' 2>/dev/null || echo "$USER")"
 git config --global user.email "$(gh api user  --jq .email 2>/dev/null || echo '')"
 git config --global init.defaultBranch main
 

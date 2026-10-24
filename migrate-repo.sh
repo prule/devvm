@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run INSIDE the VM. Migrates one repo off dev containers.
 #
-#   ./migrate-repo.sh homefleet
+#   ./migrate-repo.sh my-repo [github-owner]
+#
+# github-owner defaults to the account gh is logged in as.
 #
 # Does NOT commit and does NOT push. Review the diff, run the tests, then commit
 # yourself. A repo that won't build on the pinned Node is information, not a
@@ -9,7 +11,8 @@
 set -euo pipefail
 
 REPO="${1:?usage: migrate-repo.sh <repo-name> [github-owner]}"
-OWNER="${2:-prule}"
+OWNER="${2:-$(gh api user --jq .login 2>/dev/null || true)}"
+[ -n "$OWNER" ] || { echo "no github-owner given and gh is not logged in" >&2; exit 1; }
 NODE_VERSION="26.7.0"
 DIR="$HOME/projects/current/$REPO"
 

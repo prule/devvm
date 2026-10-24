@@ -13,7 +13,7 @@
   ],
   "packageRules": [
     {
-      "description": "A major bump changes all ~40 projects at once; open it only when asked from the Dependency Dashboard",
+      "description": "A major bump changes every project at once; open it only when asked from the Dependency Dashboard",
       "matchFileNames": ["dev.yaml"],
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true

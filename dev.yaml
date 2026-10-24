@@ -8,7 +8,7 @@
 #
 #   limactl start ~/projects/current/devvm/dev.yaml --name=dev
 #
-# Translated from homefleet/.devcontainer/{Dockerfile,post-create.sh}. Steps
+# Translated from a per-project .devcontainer/{Dockerfile,post-create.sh}. Steps
 # that existed only to work around container boundaries were dropped, not
 # ported — each one is marked "GONE:" below so the omission is deliberate and
 # reviewable rather than an oversight.
@@ -32,8 +32,8 @@ rosetta:
 # This is the one knob to turn if things feel tight.
 cpus: 6           # of 8
 memory: 14GiB     # of 24 — leaves 10GB for macOS and the thin client
-# Measured, not guessed. All 32 repos together are 0.24GB of tracked source
-# plus git history — the code is tiny. The budget:
+# Measured, not guessed. Tracked source plus git history is small — well under
+# 1GB across every project. The budget:
 #
 #   Ubuntu base + apt (2 JDKs ~700MB, Docker, build-essential, X libs)  ~3GB
 #   Node + pnpm + OpenSpec                                            ~0.3GB
@@ -48,15 +48,14 @@ memory: 14GiB     # of 24 — leaves 10GB for macOS and the thin client
 #
 # node_modules is cheap because pnpm hardlinks into the store on ext4, so those
 # trees are mostly the same inodes as the store rather than copies of it. Note
-# the exception: only ~10 of the 40 repos use pnpm. The npm/yarn ones (sdlc,
-# toolbox, promo-manager, countdown-backend...) write flat duplicated trees
-# with no dedup, and they are what the 1.5GB above is mostly for.
+# the exception: repos on npm or yarn write flat duplicated trees with no
+# dedup, and they are what the 1.5GB above is mostly for.
 #
 # Sparse, so this is a ceiling and not a reservation — but not therefore free.
 # The image grows and never shrinks when files are deleted inside the guest, so
-# it only ratchets up, and the host has ~77GB free once Docker Desktop goes. A
-# ceiling above that lets a runaway build fill the macOS boot volume. 60GiB is
-# 3x the realistic peak and still well inside the host's free space.
+# it only ratchets up. A ceiling above the host's free space lets a runaway
+# build fill the macOS boot volume. 60GiB is 3x the realistic peak; keep it well
+# inside the host's free space.
 # Growing a Lima disk later is supported; shrinking is not. Start small.
 disk: 60GiB
 
@@ -125,7 +124,7 @@ portForwards:
     hostPortRange: [54321, 54324]
 
 # --- Pinned versions ----------------------------------------------------------
-# One set for every project. Bumping these bumps all ~40 repos at once; that is
+# One set for every project. Bumping these bumps every project at once; that is
 # the point, and it is also the risk. Bump deliberately.
 #
 # `param:`, NOT `env:`. They look interchangeable and are not: `env:` sets the
@@ -154,9 +153,9 @@ param:
   # means editing these two lines — by hand: Renovate has no SDKMAN datasource.
   #
   # Java is the one place "one version for everything" doesn't hold: Gradle
-  # toolchains are a declared per-project requirement, not a preference. The
-  # laptime-insights modules pin jvmToolchain(21), and with only 25 installed
-  # Gradle either auto-provisions mid-build or fails. Gradle discovers both
+  # toolchains are a declared per-project requirement, not a preference. A
+  # project that pins jvmToolchain(21), with only 25 installed, makes
+  # Gradle either auto-provision mid-build or fail. Gradle discovers both
   # from SDKMAN's candidates directory, so no auto-provisioning happens.
   JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"
   JAVA_DEFAULT: "25.0.4-tem"
@@ -188,16 +187,15 @@ provision:
       # postgresql-client: the migration scripts run raw SQL against the shared
       # Supabase instance directly (the Supabase CLI's own migration up/db push
       # stop working once a database is shared across apps' migration
-      # histories). Ported as-is from homefleet's Dockerfile.
+      # histories). Ported as-is from the original Dockerfile.
       apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
         build-essential postgresql-client
 
       # --- Electron -----------------------------------------------------------
-      # logbook and markdown-navigator are Electron apps, and logbook runs its
-      # unit tests INSIDE Electron (scripts/vitest-under-electron.mjs) plus
-      # Playwright e2e against a packaged build — so Electron has to launch
-      # here, not merely compile.
+      # Electron apps run their unit tests INSIDE Electron, plus Playwright e2e
+      # against a packaged build — so Electron has to launch here, not merely
+      # compile.
       #   xvfb      : a virtual display; there is no real one in this VM
       #   fakeroot  : electron-builder needs it for Linux (deb) targets
       # Playwright's own --with-deps covers some of these, but only some, and
@@ -309,7 +307,7 @@ provision:
       # --- Docker Engine, native ---------------------------------------------
       # Not Docker Desktop: no licence question, no 47GB VM-inside-a-VM, and
       # containers run directly on this kernel. This is where
-      # supabase-local-platform runs.
+      # the local Supabase stack runs.
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
       echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \

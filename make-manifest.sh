@@ -6,12 +6,8 @@
 #   ./make-manifest.sh --as-is [projects-root]  # keep existing dir names
 #
 # By default the checkout path is ALIGNED to the repo name, so regenerating
-# never reintroduces a mismatch. On the host seven directories are currently
-# named differently from their repo (exercise -> strength-guide,
-# youtube-aggregator -> video-aggregator, toolbox -> tool-box, homefleet ->
-# home-fleet, clipboard -> clipboard-queue, quotes-github -> quotes,
-# catchup-openspec-claude-48 -> catchup-open-spec-claude-48); aligned output
-# drops those.
+# never reintroduces a mismatch. A host directory named differently from its
+# repo (say toolbox/ holding tool-box) is written under the repo name.
 #
 # The manifest stays the source of truth and is hand-editable, so a path can
 # be pointed somewhere other than the repo name later — run with --as-is to
@@ -45,8 +41,7 @@ branch_of() { git -C "$1" branch --show-current 2>/dev/null; }
   echo "# path<TAB>owner/repo<TAB>branch"
   echo "#"
   echo "# Submodules are deliberately absent: clone-all.sh passes"
-  echo "# --recurse-submodules, so pauls-blog/themes/hugo-simple-beauty and"
-  echo "# strength/{strength-guide,strength-programs} arrive with their parent."
+  echo "# --recurse-submodules, so they arrive with their parent."
   echo ""
 
   # --- top level ---
@@ -72,7 +67,7 @@ branch_of() { git -C "$1" branch --show-current 2>/dev/null; }
       continue
     fi
     r="$(repo_of "$d")"; [ -n "$r" ] || continue
-    # The parent (laptime-insights/, bank-example-claude/) is a plain folder,
+    # The parent is a plain folder,
     # not a repo, so only the leaf is aligned.
     [ "$ALIGN" -eq 1 ] && rel="${rel%/*}/${r##*/}"
     printf '%s\t%s\t%s\n' "$rel" "$r" "$(branch_of "$d")"

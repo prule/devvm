@@ -3,7 +3,7 @@
 #
 #   ./clone-all.sh                 clone everything that is missing
 #   ./clone-all.sh --dry-run       show what it would do
-#   ./clone-all.sh --filter sdlc   only paths matching a pattern
+#   ./clone-all.sh --filter api    only paths matching a pattern
 #   ./clone-all.sh --update        also fetch repos that already exist
 #   ./clone-all.sh --root DIR      somewhere other than ~/projects/current
 #
@@ -11,9 +11,8 @@
 # Individual failures do not stop the run; they are listed at the end and the
 # script exits non-zero.
 #
-# Requires the VM's own SSH key to be on GitHub — see setup-github.sh. One
-# repo (supabase-local-platform) is private, so an unauthenticated run will
-# fail on exactly that one.
+# Requires the VM's own SSH key to be on GitHub — see setup-github.sh. Clones
+# go over SSH, so without it every private repo fails.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +25,7 @@ while [ $# -gt 0 ]; do
     --update)  UPDATE=1 ;;
     --filter)  FILTER="${2:?--filter needs a pattern}"; shift ;;
     --root)    ROOT="${2:?--root needs a directory}"; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -42,8 +41,8 @@ declare -a failed=()
 
 # ---------------------------------------------------------------------------
 # Clones. Order follows the manifest: top-level first, then nested paths —
-# git creates missing parent directories itself, so laptime-insights/ and
-# friends need no mkdir.
+# git creates missing parent directories itself, so the plain folders that
+# hold nested clones need no mkdir.
 # ---------------------------------------------------------------------------
 say "==> Cloning into $ROOT"
 mkdir -p "$ROOT"
@@ -72,8 +71,8 @@ while IFS=$'\t' read -r path repo branch; do
     step "$path" "would clone $repo @ ${branch:-default}"; continue
   fi
 
-  # --recurse-submodules is what brings pauls-blog's theme and strength's two
-  # submodules along; they are deliberately absent from the manifest.
+  # --recurse-submodules is what brings submodules along with their parent;
+  # they are deliberately absent from the manifest.
   if git clone --quiet --recurse-submodules "git@github.com:${repo}.git" "$target" 2>/dev/null; then
     if [ -n "$branch" ] && [ "$branch" != "$(git -C "$target" branch --show-current)" ]; then
       if git -C "$target" checkout --quiet "$branch" 2>/dev/null; then

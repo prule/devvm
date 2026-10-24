@@ -7,11 +7,11 @@ Replaces the per-project `.devcontainer/` setup. Rationale and trade-offs:
 
 ```
 macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
-├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  all 40 repos
+├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  every repo
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 ├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright, Electron
-├── Xcode / iOS Simulator              ├── Docker → supabase-local-platform
+├── Xcode / iOS Simulator              ├── Docker, Supabase CLI
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
 Two thin clients on the Mac, one box doing the work. No shared folders.
@@ -118,44 +118,28 @@ The SSH port gotcha above applies here too: after a VM restart, re-run `./bootst
 
 ## Checking out the projects
 
-`clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`.
+`clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`. Generate it on the host from your existing checkout:
 
-**Paths are aligned to repo names.** `make-manifest.sh` enforces that on every regeneration, so a checkout directory and its repo never drift apart. The manifest is still the source of truth and is hand-editable, so a path *can* be pointed elsewhere deliberately; `make-manifest.sh --as-is` captures such a layout back from disk instead of flattening it.
+```bash
+./make-manifest.sh              # scans ~/projects/current
+./make-manifest.sh ~/code       # or another root
+```
 
-Aligning dropped seven host-side mismatches, which is why the host and the VM will not have identical directory names:
+The manifest is hand-editable and is the source of truth for what gets cloned. What it records:
 
-| host directory | VM directory (= repo) |
-|---|---|
-| `exercise` | `strength-guide` |
-| `youtube-aggregator` | `video-aggregator` |
-| `toolbox` | `tool-box` |
-| `homefleet` | `home-fleet` |
-| `clipboard` | `clipboard-queue` |
-| `quotes-github` | `quotes` |
-| `catchup-openspec-claude-48` | `catchup-open-spec-claude-48` |
+- **Paths, aligned to repo names.** By default a directory whose name differs from its repo (`toolbox` holding `tool-box`, say) is written under the repo name, so the VM's directory names can differ from the host's. Use `make-manifest.sh --as-is` to keep the host's names instead.
+- **Branches.** Each repo is cloned on the branch it was on, not necessarily `main`.
+- **Nested clones.** A plain folder holding several repos is fine: only the leaf directories are repos, and only they are listed. Submodules are left out, because `clone-all.sh` clones with `--recurse-submodules` and brings them along with their parent.
+- **Worktrees.** These go in `worktrees.tsv` and are added with `git worktree add` once the parent exists. Their names are worktree labels, not repos, so they are not aligned.
 
-What the manifest still earns its place for, beyond names:
-
-- **Branches.** Several repos are not on `main` — `sdlc` is on `chore/plugin-autoupdate`, `home-fleet` on `fix/assets-load-drain-race`, `bank-example` on `v2-openspec-claude`.
-- **Nested clones.** `laptime-insights/` and `bank-example-claude/` are plain folders holding their own repos; `programming/principles` likewise. Only the leaf is aligned — the parent folder is not a repo. Submodules are deliberately *absent*: `--recurse-submodules` brings `pauls-blog`'s theme and `strength`'s two along with their parent.
-- **Worktrees.** `sdlc-baseline-uc002` and `sdlc-pipeline-opus-uc002` are worktrees of `sdlc`, not clones. `worktrees.tsv` records them and they are added with `git worktree add` after the parent exists. Their names are worktree labels, not repos, so they are not aligned.
-
-### Repos that appear twice
-
-Aligning made some pre-existing duplication obvious. These are the same repo checked out in two places, and `clone-all.sh` will fetch each twice:
-
-- `prule/bank-example` — as `bank-example` and as `bank-example-claude/bank-example`
-- `prule/strength-guide` — as `strength-guide` (was `exercise`) and as `strength`'s submodule
-- `prule/strength-programs` — as `strength-programs` and as `strength`'s submodule
-
-Not a bug, but worth deciding about rather than inheriting.
+**Repos checked out twice** (the same repo in two directories, or both standalone and as another repo's submodule) are cloned twice. That is usually leftover duplication on the host. Decide about it rather than inheriting it.
 
 ### What this does NOT cover
 
-`not-in-git.txt` lists 11 directories that are **in no git repo at all** — `bank-core` (55 MB), `car-enthusiast-alarm` (36 MB), `db2`, `alarm`, `cars`, `holidays`, `ourfit`, `strength2` and three empty ones. A clone-based migration loses them silently, so `clone-all.sh` prints them last, every run. Copy what you want deliberately:
+`not-in-git.txt` lists directories under the root that are **in no git repo at all**. A clone-based migration loses them silently, so `clone-all.sh` prints them last, every run. Copy what you want deliberately:
 
 ```bash
-limactl copy -r ~/projects/current/bank-core dev:/home/$USER/projects/current/
+limactl copy -r ~/projects/current/<name> dev:/home/$USER/projects/current/
 ```
 
 ## JVM versions
@@ -189,7 +173,7 @@ Gradle discovers every SDKMAN-installed JDK from the candidates directory, so a 
 
 ## Electron
 
-`logbook` and `markdown-navigator` are Electron apps, and `logbook` runs its unit tests *inside* Electron (`scripts/vitest-under-electron.mjs`) plus Playwright e2e against a packaged build — so Electron has to launch here, not merely compile.
+Electron apps have to *launch* here, not merely compile: unit tests run inside Electron, and Playwright e2e runs against a packaged build.
 
 Three things make that work, all provisioned:
 
@@ -243,19 +227,19 @@ Verified in this VM: `DISPLAY=:99 electron main.js` opens a visible 800×600 win
 
 ### What cannot move here
 
-`markdown-navigator/apps/desktop` builds with `electron-builder --mac`, which needs macOS — codesigning and `.dmg` creation are not available on Linux. **That build stays on the host**, alongside Xcode. `logbook` packages with a bare `electron-builder --dir`, so in the VM it produces a *Linux* build rather than the macOS one the host produced; fine for tests, worth knowing when comparing artefacts. Per-OS release builds remain CI's job.
+`electron-builder --mac` needs macOS — codesigning and `.dmg` creation are not available on Linux. **That build stays on the host**, alongside Xcode. A bare `electron-builder --dir` still works in the VM, but produces a *Linux* build rather than the macOS one the host produced; fine for tests, worth knowing when comparing artefacts. Per-OS release builds remain CI's job.
 
 How to get a change from the VM onto the host to build and run it: **Running macOS-only builds on the host** below.
 
 ## Running macOS-only builds on the host
 
-Some things only work on macOS: `electron-builder --mac` for `markdown-navigator`, Xcode, and the iOS Simulator. For those, the code is written in the VM and built on the host. The host keeps its own checkout of each such repo, with its own `node_modules` holding macOS-native binaries. **Only git crosses the boundary.** There is no shared folder (see **WebStorm** for why).
+Some things only work on macOS: `electron-builder --mac`, Xcode, and the iOS Simulator. For those, the code is written in the VM and built on the host. The host keeps its own checkout of each such repo, with its own `node_modules` holding macOS-native binaries. **Only git crosses the boundary.** There is no shared folder (see **WebStorm** for why).
 
 The loop:
 
 1. **In the VM: commit.** Uncommitted changes do not travel. A `wip:` commit is fine; squash it later.
 2. **Move the commit to the host.** There are two ways to do it; see below.
-3. **On the host: install, build and run.** Run `pnpm install` whenever the lockfile changed: the host's `node_modules` is separate and won't follow along. Then build and run as usual. For `markdown-navigator`, that is `pnpm --filter @mdnav/desktop dev` to run it, or `… build` for the `.dmg`.
+3. **On the host: install, build and run.** Run `pnpm install` whenever the lockfile changed: the host's `node_modules` is separate and won't follow along. Then build and run as usual.
 4. **Fix things in the VM, not on the host.** Small fixes on the host are fine, but commit them and send them back (see below). Otherwise the two checkouts drift apart.
 
 ### Option A: through GitHub
@@ -278,10 +262,10 @@ git pull                                     # after that
 The host can already `ssh lima-dev`, so it can fetch from the VM's checkout directly as a git remote. This skips GitHub entirely. Unpushed and throwaway commits work, and nothing appears in the repo's branch list. Add the remote once per repo, on the host:
 
 ```bash
-git remote add vm lima-dev:projects/current/markdown-navigator
+git remote add vm lima-dev:projects/current/my-repo
 ```
 
-The path is relative to the VM home directory and uses the **VM** directory name. Seven repos have a different name on the host; see the table in **Checking out the projects**. Then each time:
+The path is relative to the VM home directory and uses the **VM** directory name, which may differ from the host's (see **Checking out the projects**). Then each time:
 
 ```bash
 git fetch vm
@@ -322,7 +306,7 @@ Edit `param:` in `dev.yaml`, then:
 limactl stop dev && limactl delete dev && ./bootstrap.sh
 ```
 
-This bumps all ~40 projects at once. That is the intent, and also the risk — it's the cost of dropping per-repo Dockerfiles. Do it deliberately, not incidentally.
+This bumps every project at once. That is the intent, and also the risk — it's the cost of dropping per-repo Dockerfiles. Do it deliberately, not incidentally.
 
 ### Applying a `dev.yaml` change without a rebuild
 
@@ -369,9 +353,9 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 ## Gotchas
 
 - **Sizing.** 6 CPU / 14 GB, up from 4/12, because the VM now runs a full IDE backend alongside the agent and the builds. JetBrains asks 2+ cores and 4 GB+ for the backend alone. This is the first knob to turn if it feels tight.
-- **Disk: 60 GiB against a measured ~20 GB peak.** All 32 repos are 0.24 GB of tracked source plus git history; the weight is the pnpm store (~4.5 GB), Supabase's Docker images (~4 GB) and the IDE's indexes (~4 GB). `node_modules` is nearly free because pnpm hardlinks into the store on ext4 — except for the ~6 repos still on npm/yarn, which write flat duplicated trees with no dedup. Sparse, so the ceiling is not a reservation, but the image only ever grows: with ~77 GB free on the host, a ceiling above that would let a runaway build fill the macOS boot volume. Growing a Lima disk later works; shrinking does not.
+- **Disk: 60 GiB against a measured ~20 GB peak.** Source and git history are small; the weight is the pnpm store (~4.5 GB), Supabase's Docker images (~4 GB) and the IDE's indexes (~4 GB). `node_modules` is nearly free because pnpm hardlinks into the store on ext4 — except for repos on npm/yarn, which write flat duplicated trees with no dedup. Sparse, so the ceiling is not a reservation, but the image only ever grows: keep the ceiling below the host's free space, or a runaway build can fill the macOS boot volume. Growing a Lima disk later works; shrinking does not.
 - **No host mounts.** `mounts: []`. Moving files: `limactl copy`, or git. See **WebStorm** above for why.
-- **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because several `laptime-insights` modules pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
+- **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because some projects pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
 - **`java` must agree across shell modes.** `/etc/environment` puts `JAVA_HOME` and a `java` entry at the **tail** of `PATH`. The tail position is load-bearing: `sdkman-init` prepends its own entry in interactive shells and `sdk use`/`sdk env` rewrites *that* one, so a `java` ahead of it wins and silently breaks per-project switching — `sdk env` reports 21 while `java -version` still says 25.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
 - **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324); the robust fix is still `server: { host: true }` in `vite.config.ts`.
@@ -411,8 +395,8 @@ Putting the projects in a named Docker volume instead of a mount removes the mou
 
 For this workload (Node and pnpm, Supabase in Docker, IDE backends that want local disk), the mount hurts most, so the files live in the VM.
 
-## What this deleted
+## What this replaces
 
-Seven `.devcontainer/` directories (~1,500 lines), seven `docs/DevContainers.md`, Docker Desktop (~47 GB), and every workaround that existed only because the environments were separate: `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`, `PLAYWRIGHT_SKIP_BROWSER_GC`, `--add-host=host.docker.internal`, the shared `/cache` volume convention, the `pnpm config set store-dir` double-write under two `XDG_CONFIG_HOME` values, and the "never mount a volume at `PNPM_HOME`" rule.
+Per-project `.devcontainer/` directories and their docs, Docker Desktop, and every workaround that existed only because the environments were separate: `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`, `PLAYWRIGHT_SKIP_BROWSER_GC`, `--add-host=host.docker.internal`, the shared `/cache` volume convention, the `pnpm config set store-dir` double-write under two `XDG_CONFIG_HOME` values, and the "never mount a volume at `PNPM_HOME`" rule.
 
 Each of those is marked `GONE:` at the point in `dev.yaml` where the ported step used to be, so the omissions are reviewable rather than forgotten.
