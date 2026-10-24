@@ -245,6 +245,67 @@ Verified in this VM: `DISPLAY=:99 electron main.js` opens a visible 800×600 win
 
 `markdown-navigator/apps/desktop` builds with `electron-builder --mac`, which needs macOS — codesigning and `.dmg` creation are not available on Linux. **That build stays on the host**, alongside Xcode. `logbook` packages with a bare `electron-builder --dir`, so in the VM it produces a *Linux* build rather than the macOS one the host produced; fine for tests, worth knowing when comparing artefacts. Per-OS release builds remain CI's job.
 
+How to get a change from the VM onto the host to build and run it: **Running macOS-only builds on the host** below.
+
+## Running macOS-only builds on the host
+
+Some things only work on macOS: `electron-builder --mac` for `markdown-navigator`, Xcode, and the iOS Simulator. For those, the code is written in the VM and built on the host. The host keeps its own checkout of each such repo, with its own `node_modules` holding macOS-native binaries. **Only git crosses the boundary.** There is no shared folder (see **WebStorm** for why).
+
+The loop:
+
+1. **In the VM: commit.** Uncommitted changes do not travel. A `wip:` commit is fine; squash it later.
+2. **Move the commit to the host.** There are two ways to do it; see below.
+3. **On the host: install, build and run.** Run `pnpm install` whenever the lockfile changed: the host's `node_modules` is separate and won't follow along. Then build and run as usual. For `markdown-navigator`, that is `pnpm --filter @mdnav/desktop dev` to run it, or `… build` for the `.dmg`.
+4. **Fix things in the VM, not on the host.** Small fixes on the host are fine, but commit them and send them back (see below). Otherwise the two checkouts drift apart.
+
+### Option A: through GitHub
+
+Use this when the branch is going to be pushed anyway, for example for a PR or CI.
+
+```bash
+# VM
+git push -u origin my-branch
+```
+
+```bash
+# host
+git fetch origin && git switch my-branch    # first time
+git pull                                     # after that
+```
+
+### Option B: straight from the VM
+
+The host can already `ssh lima-dev`, so it can fetch from the VM's checkout directly as a git remote. This skips GitHub entirely. Unpushed and throwaway commits work, and nothing appears in the repo's branch list. Add the remote once per repo, on the host:
+
+```bash
+git remote add vm lima-dev:projects/current/markdown-navigator
+```
+
+The path is relative to the VM home directory and uses the **VM** directory name. Seven repos have a different name on the host; see the table in **Checking out the projects**. Then each time:
+
+```bash
+git fetch vm
+git switch -c my-branch vm/my-branch    # first time
+git pull vm my-branch                   # after that
+```
+
+Things to know about Option B:
+
+- **After a VM restart, re-run `./bootstrap.sh` first.** Otherwise `git fetch vm` fails with `Connection refused` because the SSH port changed (see **Two things that will catch you out**).
+- **Sending host commits back:** git refuses to push into the branch the VM has checked out. Push under a different name and merge it in the VM:
+
+  ```bash
+  # host
+  git push vm HEAD:refs/heads/from-host
+  ```
+
+  ```bash
+  # VM
+  git merge from-host && git branch -d from-host
+  ```
+
+- **It is not a backup.** `~/.lima` is excluded from Time Machine, so commits that exist only in the VM and on the host's `vm/*` refs are still unpushed work. Push anything you want to keep.
+
 ## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
@@ -317,7 +378,7 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
 - **No agent forwarding, on purpose.** `bootstrap.sh` strips `ForwardAgent yes` if a regenerated SSH block ever introduces one. The VM has its own GitHub key.
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.
-- **Xcode / iOS stays on the host.** Nothing simulator-related can move into the VM.
+- **Xcode / iOS stays on the host.** Nothing simulator-related can move into the VM. See **Running macOS-only builds on the host** for the round trip.
 
 ## Why not one devcontainer with everything mounted?
 
