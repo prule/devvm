@@ -569,6 +569,12 @@ provision:
   # from GitHub at its next start. autoUpdate makes it check the marketplace
   # for a newer plugin version at each start (off by default for third-party
   # marketplaces). Merged with jq so other settings survive.
+  #
+  # Provision runs on every boot, so once the desktop app has installed its
+  # CLI (~/.claude/remote/ccd-cli/<version>), each boot also refreshes the
+  # marketplace and updates the plugin to its latest version. This does not
+  # rely on autoUpdate, which only acts at the start of a session. Failures
+  # (no network, no GitHub key yet) do not fail the boot.
   # ---------------------------------------------------------------------------
   - mode: user
     script: |
@@ -589,6 +595,15 @@ provision:
           .extraKnownMarketplaces[$m] = {source: {source: "github", repo: $r}, autoUpdate: true}
           | .enabledPlugins[$p] = true
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
+      done
+
+      claude="$(command -v claude || ls -d "$HOME"/.claude/remote/ccd-cli/* 2>/dev/null | sort -V | tail -1 || true)"
+      [ -n "$claude" ] || exit 0
+      echo "$plugins" | while read -r market repo plugin; do
+        [ -n "$market" ] || continue
+        timeout 180s "$claude" plugin marketplace update "$market" < /dev/null \
+          && timeout 180s "$claude" plugin update "$plugin@$market" --scope user < /dev/null \
+          || echo "! plugin $plugin not updated — run '$claude plugin update $plugin@$market' later"
       done
 
 # --- Readiness ----------------------------------------------------------------
