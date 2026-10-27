@@ -566,7 +566,9 @@ provision:
   # at provision time (the desktop app installs it on first connect), so
   # `claude plugin install` is not an option. Instead declare the marketplace
   # and enable the plugin in ~/.claude/settings.json; Claude Code installs it
-  # from GitHub at its next start. Merged with jq so other settings survive.
+  # from GitHub at its next start. autoUpdate makes it check the marketplace
+  # for a newer plugin version at each start (off by default for third-party
+  # marketplaces). Merged with jq so other settings survive.
   # ---------------------------------------------------------------------------
   - mode: user
     script: |
@@ -584,7 +586,7 @@ provision:
         [ -n "$market" ] || continue
         tmp="$(mktemp)"
         jq --arg m "$market" --arg r "$repo" --arg p "$plugin@$market" '
-          .extraKnownMarketplaces[$m] = {source: {source: "github", repo: $r}}
+          .extraKnownMarketplaces[$m] = {source: {source: "github", repo: $r}, autoUpdate: true}
           | .enabledPlugins[$p] = true
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
       done
