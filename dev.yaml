@@ -188,9 +188,11 @@ provision:
       # Supabase instance directly (the Supabase CLI's own migration up/db push
       # stop working once a database is shared across apps' migration
       # histories). Ported as-is from the original Dockerfile.
+      # python3-venv: project-local virtualenvs (e.g. docs/explainer/tts uses
+      # one for Piper). Ubuntu's python3 ships without ensurepip.
       apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
-        build-essential postgresql-client
+        build-essential postgresql-client python3-venv
 
       # --- Electron -----------------------------------------------------------
       # Electron apps run their unit tests INSIDE Electron, plus Playwright e2e
