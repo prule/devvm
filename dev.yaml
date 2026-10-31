@@ -564,16 +564,49 @@ provision:
       done
 
   # ---------------------------------------------------------------------------
-  # USER: Claude Code plugins, user-level. The `claude` CLI does not exist yet
-  # at provision time (the desktop app installs it on first connect), so
+  # USER: the `claude` CLI, for a shell in the VM (`ssh lima-dev`, Gateway's
+  # terminal). The desktop app installs its own copy on first connect, but
+  # under ~/.claude/remote/ccd-cli/<version>, which is not on PATH and changes
+  # name with every update. This is the native installer: ~/.local/bin/claude,
+  # self-updating, so it is not pinned in `param:` — the desktop app's copy
+  # floats too, and the two stay roughly in step.
+  #
+  # Ubuntu's ~/.profile adds ~/.local/bin only if it existed at login, and it
+  # did not on a fresh VM, so the rc files add it explicitly. Own marker, not
+  # the toolchain block's, so an existing VM picks it up on its next boot.
+  # Best-effort: a download failure must not fail the boot.
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      if [ ! -x "$HOME/.local/bin/claude" ]; then
+        curl -fsSL https://claude.ai/install.sh | bash \
+          || echo "! claude CLI skipped — run 'curl -fsSL https://claude.ai/install.sh | bash' later"
+      fi
+
+      for shell in bash zsh; do
+        rc="$HOME/.${shell}rc"
+        touch "$rc"
+        grep -q 'claude cli' "$rc" && continue
+        {
+          echo ''
+          echo '# --- claude cli ---'
+          echo 'export PATH="$HOME/.local/bin:$PATH"'
+        } >> "$rc"
+      done
+
+  # ---------------------------------------------------------------------------
+  # USER: Claude Code plugins, user-level. The `claude` CLI may not exist yet
+  # at provision time (the step above is best-effort), so
   # `claude plugin install` is not an option. Instead declare the marketplace
   # and enable the plugin in ~/.claude/settings.json; Claude Code installs it
   # from GitHub at its next start. autoUpdate makes it check the marketplace
   # for a newer plugin version at each start (off by default for third-party
   # marketplaces). Merged with jq so other settings survive.
   #
-  # Provision runs on every boot, so once the desktop app has installed its
-  # CLI (~/.claude/remote/ccd-cli/<version>), each boot also refreshes the
+  # Provision runs on every boot, so once a CLI exists (~/.local/bin/claude,
+  # or the desktop app's ~/.claude/remote/ccd-cli/<version>), each boot also refreshes the
   # marketplace and updates the plugin to its latest version. This does not
   # rely on autoUpdate, which only acts at the start of a session. Failures
   # (no network, no GitHub key yet) do not fail the boot.
@@ -589,6 +622,7 @@ provision:
       # "<marketplace name> <github owner/repo> <plugin name>", one per line.
       plugins='
       sdlc-pipeline prule/sdlc-pipeline sdlc-pipeline
+      ponytail DietrichGebert/ponytail ponytail
       '
       echo "$plugins" | while read -r market repo plugin; do
         [ -n "$market" ] || continue
@@ -599,7 +633,7 @@ provision:
         ' "$settings" > "$tmp" && mv "$tmp" "$settings"
       done
 
-      claude="$(command -v claude || ls -d "$HOME"/.claude/remote/ccd-cli/* 2>/dev/null | sort -V | tail -1 || true)"
+      claude="$(command -v claude || command -v "$HOME/.local/bin/claude" || ls -d "$HOME"/.claude/remote/ccd-cli/* 2>/dev/null | sort -V | tail -1 || true)"
       [ -n "$claude" ] || exit 0
       echo "$plugins" | while read -r market repo plugin; do
         [ -n "$market" ] || continue

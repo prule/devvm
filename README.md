@@ -11,7 +11,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 ├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright, Electron
-├── Xcode / iOS Simulator              ├── Docker, Supabase CLI
+├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
 Two thin clients on the Mac, one box doing the work. No shared folders.
@@ -48,7 +48,7 @@ Then in the Claude Code desktop app: environment dropdown → **+ Add SSH connec
 Verify:
 
 ```bash
-limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; java -version; docker run --rm hello-world'
+limactl shell dev -- bash -lc 'node -v; pnpm -v; openspec --version; claude --version; java -version; docker run --rm hello-world'
 ```
 
 `java -version` must report **25**. Two JDKs are installed, so this is worth
@@ -330,7 +330,7 @@ limactl shell dev -- ls ~/.claude/skills
 
 A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
 
-Plugins (currently `sdlc-pipeline`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI is not installed until the desktop app first connects. Claude Code fetches them from GitHub at its next start. Once the desktop app has installed its CLI, every boot also runs `claude plugin marketplace update` and `claude plugin update` (user scope), so a restart brings the plugin to its latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add prule/sdlc-pipeline` and `claude plugin install sdlc-pipeline@sdlc-pipeline` there.
+Plugins (currently `sdlc-pipeline` and `ponytail`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI install is best-effort and may not have happened yet. Claude Code fetches them from GitHub at its next start. Once a `claude` CLI exists (the provisioned `~/.local/bin/claude`, or the desktop app's own copy), every boot also runs `claude plugin marketplace update` and `claude plugin update` (user scope), so a restart brings the plugin to its latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add <owner>/<repo>` and `claude plugin install <plugin>@<marketplace>` there, with the values from the plugins list in `dev.yaml` (for example `prule/sdlc-pipeline` and `sdlc-pipeline@sdlc-pipeline`).
 
 Use the full rebuild above instead when a change is not additive: removing a package, changing a version pin, or changing the disk.
 
