@@ -1,0 +1,29 @@
+# written<TAB>spoken
+# Literal, case-sensitive replacements applied to the VO text before it is
+# synthesised. Longest entries are applied first. An entry that starts or ends
+# with a letter or digit matches whole words only. Check the result in out/*.txt
+# (written even with --dry-run), then listen and add what sounds wrong.
+`ssh -O exit`	S S H dash O exit
+`lima-dev`	lima dev
+`dev.yaml`	dev dot yaml
+`bootstrap.sh`	the bootstrap script
+pnpm	P N P M
+`apt install`	apt install
+`localhost:5173`	localhost fifty-one seventy-three
+`host: true`	host true
+`xvfb-run`	X V F B run
+`--no-sandbox`	no sandbox
+`@mention`	at-mention
+`GONE:`	gone
+devcontainers	dev containers
+devcontainer	dev container
+macOS	mac O S
+iOS	eye O S
+OS	O S
+PWAs	P W As
+PWA	P W A
+Xcode	ex code
+Vite	veet
+SSH	S S H
+VNC	V N C
+VM	V M

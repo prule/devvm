@@ -1,0 +1,49 @@
+Claude Code is running in a Linux V M on my Mac. I drive it from the Claude desktop app over S S H. It builds and runs my P W As and my Electron apps in that V M. The only thing that comes back to the Mac is the native mac O S build, and the only thing that crosses over is git.
+
+In this video: why one V M, how the desktop app connects, and how each kind of app works.
+
+Claude Code is most useful when it can run commands on its own. Install, build, test, launch. On my Mac, that means giving an agent my whole machine.
+
+So I tried dev containers. One per project. That was seven setups, seven logins, and a pile of workarounds to share caches and config between them.
+
+Then one dev container with everything mounted. That's slow. Every P N P M install and every git status crosses the mount, file watching misses changes, and node modules ends up with binaries for the wrong O S.
+
+So the question is: how do I give Claude a real dev machine that's separate from my Mac, without losing GUI apps or ex code?
+
+The first point. One V M is a simpler and safer box for the agent.
+
+The whole machine is this one file, dev dot yaml. Lima config, Node, P N P M, Java, Docker, Supabase, Playwright, Electron's libraries. And one rule: if something is installed in the V M and not in this file, that's a bug in this file.
+
+That rule matters because there are no snapshots. If the V M breaks, I delete it and run bootstrap again. That only works if the file is complete. So I never apt install by hand.
+
+Nothing from the Mac is mounted. The V M has its own GitHub key, and no S S H agent forwarding. If Claude does something wrong in there, the worst case is a rebuild.
+
+And one login. Claude and the GitHub CLI log in once. All the dev container workarounds are gone, and each one is marked gone in the file, so I can see what I left out.
+
+The second point. The Claude desktop app connects to the V M over S S H, with nothing extra to install.
+
+the bootstrap script creates the V M and writes an S S H config entry called lima dev.
+
+In the desktop app, I add an S S H connection, type lima dev, and leave the port and key empty. On the first connect, Claude Code installs itself in the V M. JetBrains Gateway and VS Code use the same host.
+
+Two things will catch you out. The S S H port changes every time the V M restarts, so re-run bootstrap. And Lima reuses S S H connections, so after a group or environment change, drop the old connection with S S H dash O exit.
+
+The third point. Every kind of app I build has a path. Two run fully in the V M. One goes back to the Mac.
+
+P W As first. The dev server runs in the V M. Lima forwards the ports, so the browser on my Mac opens localhost fifty-one seventy-three. Browsers treat localhost as secure, so the service worker and the install prompt work the same as local.
+
+Set host true in the veet config. dev dot yaml also forwards the usual ports: veet, preview, Supabase. Playwright and Supabase run in the V M, so Claude can run the whole test suite itself.
+
+Electron. The app has to actually launch in the V M, because the tests run inside Electron. There's no screen, so tests run under X V F B run.
+
+On Ubuntu 23.10 and later, you hit this sandbox error. The fix is one kernel setting, and the sandbox stays on. Don't use no sandbox.
+
+To see the app, the V M runs a second display, served over V N C on localhost. I start the app on display 99, open Screen Sharing on the Mac, and there it is. Test windows go to a different display, so they never cover the one I'm watching.
+
+Finally, mac O S. ex code, the eye O S Simulator and the Mac Electron build need mac O S. So Claude writes the code in the V M, and the Mac builds it. Only git crosses over.
+
+Claude commits in the V M. On the Mac, I add the V M as a git remote and fetch from it directly. No GitHub needed, and throwaway commits never show up in the repo. Then I build in ex code as usual. If I fix something on the Mac, I push it back under a different branch name and merge it in the V M.
+
+What does it cost? Nothing in the V M is backed up, so push before you stop for the day. There are no snapshots, so the file has to be complete. at-mention of files doesn't work in S S H sessions, but attaching files does. And a toolchain bump hits every project at once. For me, that's a fair trade.
+
+So: one V M, one file, one S S H connection. P W As and Electron run in the V M, and mac O S builds come home over git. The repo is linked below. Run bootstrap, add the S S H connection, and let Claude run your tests.

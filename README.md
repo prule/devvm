@@ -23,6 +23,7 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 |---|---|
 | `dev.yaml` | The environment. Lima config + all provisioning. **The only source of truth.** |
 | `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, excludes `~/.lima` from Time Machine. |
+| `update-vm.sh` | Host-side. Applies the current `dev.yaml` to the existing VM with a restart, no rebuild, and shows the boot's provision warnings. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
 | `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
 | `clone-all.sh` | Run in the VM. Clones every project from the manifest, adds the worktrees, warns about what git does not cover. |
@@ -315,12 +316,10 @@ Lima runs the provision scripts on **every boot**, not only on create, so a rest
 The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, which was taken from `dev.yaml` when the VM was created. Editing `dev.yaml` here changes nothing until that copy is replaced. On the host:
 
 ```bash
-git pull
-limactl stop dev
-cp dev.yaml ~/.lima/dev/lima.yaml
-limactl start dev
-./bootstrap.sh    # the SSH port changed with the restart
+./update-vm.sh
 ```
+
+It pulls, drops the shared SSH connection, stops the VM, copies `dev.yaml` over `~/.lima/dev/lima.yaml`, and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block for the new port. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
 
 Each provision step skips work it already did (the skills step skips any skill whose `SKILL.md` exists), so a restart re-runs them quickly. Check the result:
 
