@@ -106,7 +106,12 @@ containerd:
 #   54321 supabase api · 54322 db · 54323 studio · 54324 mailpit
 #   5901 x11vnc for display :99 — localhost-only by design, so it must be here
 #   9000 sonarqube — published on 127.0.0.1 only, same reasoning
+#   5432 postgres (the dev database, not Supabase's) — same again
 portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [5432, 5432]
+    hostIP: "127.0.0.1"
+    hostPortRange: [5432, 5432]
   - guestIP: "127.0.0.1"
     guestPortRange: [9000, 9000]
     hostIP: "127.0.0.1"
@@ -158,6 +163,11 @@ param:
   SONARQUBE_VERSION: "26.9.0.129388-community"
   # renovate: datasource=github-releases depName=SonarSource/sonar-scanner-cli
   SONAR_SCANNER_VERSION: "8.2.0.6438"
+  # The dev database (container), and the major of the psql client too. A
+  # major bump needs a rebuild: Postgres data directories do not carry across
+  # majors without a dump and restore.
+  # renovate: datasource=docker depName=postgres
+  POSTGRES_VERSION: "18.6"
   # JVM versions come from SDKMAN, not apt — the same division as Node, where
   # fnm owns every version and apt owns none. SDKMAN identifiers, so a bump
   # means editing these two lines — by hand: Renovate has no SDKMAN datasource.
@@ -194,15 +204,29 @@ provision:
 
       apt-get update
 
-      # postgresql-client: the migration scripts run raw SQL against the shared
-      # Supabase instance directly (the Supabase CLI's own migration up/db push
-      # stop working once a database is shared across apps' migration
-      # histories). Ported as-is from the original Dockerfile.
       # python3-venv: project-local virtualenvs (e.g. docs/explainer/tts uses
       # one for Piper). Ubuntu's python3 ships without ensurepip.
       apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
-        build-essential postgresql-client python3-venv
+        build-essential python3-venv
+
+      # --- Postgres client ----------------------------------------------------
+      # psql is how the migration scripts run raw SQL against the shared
+      # Supabase instance (the Supabase CLI's own migration up/db push stop
+      # working once a database is shared across apps' migration histories),
+      # and how agents query the dev database below.
+      # From the PostgreSQL project's apt repo, not Ubuntu's: noble ships 16,
+      # and a client older than the server is the broken direction — pg_dump
+      # refuses a newer server outright. A newer client handles every older
+      # server, Supabase's included. Major taken from POSTGRES_VERSION, so the
+      # client and the dev database move together.
+      install -d -m 755 /etc/apt/keyrings
+      curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --batch --yes --dearmor -o /etc/apt/keyrings/pgdg.gpg
+      echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list
+      apt-get update
+      apt-get install -y --no-install-recommends "postgresql-client-${PARAM_POSTGRES_VERSION%%.*}"
 
       # --- Electron -----------------------------------------------------------
       # Electron apps run their unit tests INSIDE Electron, plus Playwright e2e
@@ -260,6 +284,7 @@ provision:
         chmod 0600 "$vnc_dir/password.txt" "$vnc_dir/passwd"
       fi
       printf '%s\n' \
+        "SET client_min_messages = warning;" \
         '[Unit]' \
         'Description=Persistent X display :99 for viewing GUI apps' \
         '[Service]' \
@@ -270,6 +295,7 @@ provision:
         'WantedBy=multi-user.target' \
         > /etc/systemd/system/devvm-display.service
       printf '%s\n' \
+        "SET client_min_messages = warning;" \
         '[Unit]' \
         'Description=VNC server for display :99' \
         'BindsTo=devvm-display.service' \
@@ -363,6 +389,61 @@ provision:
         rm -rf "$tmp"
       fi
       ln -sfn "$scanner/bin/sonar-scanner" /usr/local/bin/sonar-scanner
+
+      # --- Postgres: the dev database -----------------------------------------
+      # A local database agents can query while they code, separate from the
+      # Supabase stack (54322). Two login roles, so exploring cannot change
+      # anything:
+      #   dev_ro  reads every table in every database (pg_read_all_data), and
+      #           its sessions start read-only on top of that
+      #   dev_rw  owns the `dev` database and may create more; run migrations
+      #           as this one
+      # Passwords are generated once and kept in /etc/devdb (root only). Every
+      # boot re-applies them, the roles and the grants, so a re-provision and a
+      # fresh volume both end in the same state.
+      install -d -m 700 /etc/devdb
+      for role in postgres dev_ro dev_rw; do
+        [ -s "/etc/devdb/$role" ] || (umask 077; openssl rand -hex 24 > "/etc/devdb/$role")
+      done
+      # The volume is mounted at /var/lib/postgresql, not .../data: from 18 on
+      # the image keeps its data in a per-major subdirectory there.
+      docker inspect postgres > /dev/null 2>&1 \
+        || docker run -d --name postgres --restart unless-stopped \
+          -p 127.0.0.1:5432:5432 \
+          -e POSTGRES_PASSWORD="$(cat /etc/devdb/postgres)" \
+          -v postgres_data:/var/lib/postgresql \
+          "postgres:${PARAM_POSTGRES_VERSION}"
+      docker start postgres > /dev/null
+      # Wait over TCP, not the socket: on first start the image runs a
+      # socket-only server to initialise, then restarts. Statements sent to
+      # that one would be cut off by the restart.
+      timeout 120s bash -c 'until docker exec postgres pg_isready -q -h 127.0.0.1 -U postgres; do sleep 2; done'
+      # Through stdin, not -c: psql expands :'var' only in input it reads.
+      printf '%s\n' \
+        "SET client_min_messages = warning;" \
+        "SELECT 'CREATE ROLE dev_rw' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dev_rw') \\gexec" \
+        "SELECT 'CREATE ROLE dev_ro' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dev_ro') \\gexec" \
+        "ALTER ROLE dev_rw LOGIN CREATEDB PASSWORD :'rw_pw';" \
+        "ALTER ROLE dev_ro LOGIN PASSWORD :'ro_pw';" \
+        "ALTER ROLE dev_ro SET default_transaction_read_only = on;" \
+        "GRANT pg_read_all_data TO dev_ro;" \
+        "SELECT 'CREATE DATABASE dev OWNER dev_rw' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'dev') \\gexec" \
+        | docker exec -i postgres psql -q -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -v rw_pw="$(cat /etc/devdb/dev_rw)" -v ro_pw="$(cat /etc/devdb/dev_ro)"
+      # `psql service=dev_ro` / `service=dev_rw`. Ubuntu's libpq reads services
+      # from here; passwords go in ~/.pgpass, which is the user's own file, so
+      # only this database's two lines are replaced.
+      install -d /etc/postgresql-common
+      printf '[%s]\nhost=localhost\nport=5432\ndbname=dev\nuser=%s\n\n' \
+        dev_ro dev_ro dev_rw dev_rw > /etc/postgresql-common/pg_service.conf
+      pgpass="$LOGIN_HOME/.pgpass"
+      touch "$pgpass"
+      sed -i '/^localhost:5432:\*:dev_r[ow]:/d' "$pgpass"
+      for role in dev_ro dev_rw; do
+        printf 'localhost:5432:*:%s:%s\n' "$role" "$(cat "/etc/devdb/$role")" >> "$pgpass"
+      done
+      chown "$LOGIN_USER:" "$pgpass"
+      chmod 600 "$pgpass"
 
       # --- JAVA_HOME / PATH for non-interactive shells ------------------------
       # Points at SDKMAN's `current` symlink, so `sdk default java <v>` moves
@@ -793,6 +874,15 @@ probes:
       # First start creates its database and indexes: allow a few minutes.
       timeout 300s bash -c 'until curl -fsS http://localhost:9000/api/system/status | grep -q "\"status\":\"UP\""; do sleep 5; done'
     hint: "SonarQube is not up. Check: limactl shell dev -- docker logs sonarqube"
+  - description: "Postgres (dev database)"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 300s bash -c 'until psql service=dev_ro -tAc "select 1" | grep -q 1; do sleep 5; done'
+      # The read-only role must stay read-only. An `if`, not `!`: set -e
+      # ignores a negated command, so `! psql ...` could never fail the probe.
+      if psql service=dev_ro -c "create table devvm_probe ()" 2>/dev/null; then exit 1; fi
+    hint: "Dev database is not up. Check: limactl shell dev -- docker logs postgres"
 
 message: |
   Dev VM is up.

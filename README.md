@@ -11,6 +11,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 │                                      ├── SonarQube (Docker) + sonar-check
+│                                      ├── Postgres (Docker): dev_ro + dev_rw
 ├── Browser → localhost:5173, :9000    ├── SDKMAN: Java 25 + 21, Playwright, Electron
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
@@ -363,6 +364,48 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 - **About 2–3 GB of RAM** while running. If the VM feels tight, run `docker stop sonarqube`; it stays stopped until `docker start sonarqube`, even across reboots. `sonar-check` says so if it can't reach the server.
 - **Version bumps need a rebuild.** It uses the embedded H2 database, which SonarQube can't upgrade in place. The rebuild that a `SONARQUBE_VERSION` bump already requires starts it fresh. Redo the one-time setup afterwards.
 
+## Dev database (Postgres)
+
+`dev.yaml` runs Postgres in Docker so you and Claude can work with real data while coding: read the actual schema, try a query before it goes into code, run a migration and check the result. It is separate from the Supabase stack (port 54322) and only for local data. **Never point these settings at production.**
+
+| | |
+|---|---|
+| Server | `postgres` container, `localhost:5432` (forwarded to the Mac at the same address) |
+| Database | `dev`, owned by `dev_rw` |
+| `dev_ro` | For exploring. Can read every table in every database on the server (`pg_read_all_data`) and can't change anything; its sessions also start read-only. |
+| `dev_rw` | For migrations and seed data. Owns `dev` and can create more databases, for example one per project. Not a superuser. |
+| Client | `psql`, `pg_dump` and friends, from the PostgreSQL project's apt repo at the server's major version (Ubuntu's own package is 16, too old for an 18 server) |
+
+Connect by service name. No passwords to type or paste:
+
+```bash
+psql service=dev_ro                      # explore
+psql service=dev_rw                      # change things
+psql "service=dev_ro dbname=myproject"   # another database on the same server
+```
+
+The services are defined in `/etc/postgresql-common/pg_service.conf`. The passwords are generated once per VM, kept in `/etc/devdb/` (root only), and copied into `~/.pgpass`. Provisioning replaces only the two `localhost:5432` lines there, so your other entries survive.
+
+Tools that don't read `~/.pgpass`, like Flyway or a JDBC URL, need the password passed in. Read it from `~/.pgpass` at run time rather than putting it in a repo:
+
+```bash
+FLYWAY_URL=jdbc:postgresql://localhost:5432/dev FLYWAY_USER=dev_rw \
+FLYWAY_PASSWORD="$(awk -F: '$4=="dev_rw"{print $5}' ~/.pgpass)" flyway migrate
+```
+
+### Telling Claude about it
+
+Claude only uses the database if it knows it's there. Add something like this to a repo's `CLAUDE.md`:
+
+> Local Postgres: explore with `psql service=dev_ro` (read-only). Apply migrations and seed data with `psql service=dev_rw`, only when the task calls for it. This project's database is `<name>`.
+
+### Notes
+
+- **Every boot re-applies the roles, grants and passwords**, so a re-provision or a fresh volume ends up the same. The data itself lives in the `postgres_data` Docker volume and survives restarts, but not a rebuild.
+- **To free memory**, run `docker stop postgres`. It stays stopped until `docker start postgres` or the next provision.
+- **A major version bump needs a rebuild** (or a dump and restore), because Postgres can't open an older major's data directory. The same pin sets the client's major version, so the two stay matched. Renovate holds major bumps for approval anyway (see **Renovate**).
+- **Superuser access**, when you need it: `docker exec -it postgres psql -U postgres`.
+
 ## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
@@ -407,7 +450,7 @@ Use the full rebuild above instead when a change is not additive: removing a pac
 
 ### Renovate
 
-[Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI, the `skills` CLI, SonarQube or the SonarScanner CLI. It needs the Renovate GitHub App installed on this repo.
+[Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI, the `skills` CLI, SonarQube, the SonarScanner CLI or Postgres. It needs the Renovate GitHub App installed on this repo.
 
 Each pin in `param:` has a comment directly above it that tells Renovate where to look:
 
@@ -431,7 +474,7 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 - **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because some projects pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
 - **`java` must agree across shell modes.** `/etc/environment` puts `JAVA_HOME` and a `java` entry at the **tail** of `PATH`. The tail position is load-bearing: `sdkman-init` prepends its own entry in interactive shells and `sdk use`/`sdk env` rewrites *that* one, so a `java` ahead of it wins and silently breaks per-project switching — `sdk env` reports 21 while `java -version` still says 25.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
-- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324, 9000 for SonarQube); the robust fix is still `server: { host: true }` in `vite.config.ts`.
+- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324, 9000 for SonarQube, 5432 for the dev database); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
 - **No agent forwarding, on purpose.** `bootstrap.sh` strips `ForwardAgent yes` if a regenerated SSH block ever introduces one. The VM has its own GitHub key.
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.
