@@ -320,8 +320,11 @@ provision:
       # Not Docker Desktop: no licence question, no 47GB VM-inside-a-VM, and
       # containers run directly on this kernel. This is where
       # the local Supabase stack runs.
+      # --batch --yes: on a re-provision the keyring already exists, and without
+      # them gpg asks to overwrite it on a TTY provision doesn't have — which
+      # aborts this whole script under `set -e`.
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
       echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
         > /etc/apt/sources.list.d/docker.list
 
