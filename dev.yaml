@@ -105,7 +105,12 @@ containerd:
 #   5173 vite dev · 4173 vite preview · 5174 e2e's own vite dev
 #   54321 supabase api · 54322 db · 54323 studio · 54324 mailpit
 #   5901 x11vnc for display :99 — localhost-only by design, so it must be here
+#   9000 sonarqube — published on 127.0.0.1 only, same reasoning
 portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [9000, 9000]
+    hostIP: "127.0.0.1"
+    hostPortRange: [9000, 9000]
   - guestIP: "127.0.0.1"
     guestPortRange: [5901, 5901]
     hostIP: "127.0.0.1"
@@ -148,6 +153,11 @@ param:
   # The `skills` CLI (npx skills add ...) that installs Claude Code skills.
   # renovate: datasource=npm depName=skills
   SKILLS_CLI_VERSION: "1.7.4"
+  # SonarQube Community Build (container) and the scanner that feeds it.
+  # renovate: datasource=docker depName=sonarqube
+  SONARQUBE_VERSION: "26.9.0.129388-community"
+  # renovate: datasource=github-releases depName=SonarSource/sonar-scanner-cli
+  SONAR_SCANNER_VERSION: "8.2.0.6438"
   # JVM versions come from SDKMAN, not apt — the same division as Node, where
   # fnm owns every version and apt owns none. SDKMAN identifiers, so a bump
   # means editing these two lines — by hand: Renovate has no SDKMAN datasource.
@@ -323,6 +333,34 @@ provision:
       usermod -aG docker "$LOGIN_USER"
       systemctl enable --now docker
 
+      # --- SonarQube Community Build ------------------------------------------
+      # Code-quality gate for every repo, scanned with `sonar-check` (below).
+      # Its embedded Elasticsearch refuses to start below this map count.
+      printf 'vm.max_map_count = %s\n' 524288 > /etc/sysctl.d/62-sonarqube.conf
+      sysctl -p /etc/sysctl.d/62-sonarqube.conf
+      # Created once; `unless-stopped` brings it back at boot, and leaves it
+      # down after a `docker stop sonarqube`.
+      # shortcut: embedded H2 database, which SonarQube cannot upgrade in place —
+      # fine while a version bump means a VM rebuild; move to Postgres if not.
+      docker inspect sonarqube > /dev/null 2>&1 \
+        || docker run -d --name sonarqube --restart unless-stopped \
+          -p 127.0.0.1:9000:9000 \
+          -v sonarqube_data:/opt/sonarqube/data \
+          -v sonarqube_extensions:/opt/sonarqube/extensions \
+          -v sonarqube_logs:/opt/sonarqube/logs \
+          "sonarqube:${PARAM_SONARQUBE_VERSION}"
+
+      # Scanner CLI, with its own bundled JRE so it ignores SDKMAN's java.
+      scanner="/opt/sonar-scanner-${PARAM_SONAR_SCANNER_VERSION}-linux-aarch64"
+      if [ ! -x "$scanner/bin/sonar-scanner" ]; then
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "$tmp/scanner.zip" \
+          "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${PARAM_SONAR_SCANNER_VERSION}-linux-aarch64.zip"
+        unzip -q "$tmp/scanner.zip" -d /opt
+        rm -rf "$tmp"
+      fi
+      ln -sfn "$scanner/bin/sonar-scanner" /usr/local/bin/sonar-scanner
+
       # --- JAVA_HOME / PATH for non-interactive shells ------------------------
       # Points at SDKMAN's `current` symlink, so `sdk default java <v>` moves
       # the machine default for scripts too — one place to change it.
@@ -359,6 +397,55 @@ provision:
       # support through virtio-blk under vz, so treat it as a best effort and
       # watch `ls -lks ~/.lima/dev/diffdisk` on the host if the image creeps.
       systemctl enable fstrim.timer || true
+
+  # ---------------------------------------------------------------------------
+  # DATA: `sonar-check`, the one command a repo's Verify step calls. Scans the
+  # repo it is run in, creating the SonarQube project on the first scan, and
+  # exits non-zero when the quality gate fails, after printing why — the
+  # scanner itself prints only a dashboard URL an agent cannot open.
+  # A file, not a script step, so it needs no heredoc (see the inotify note).
+  # ---------------------------------------------------------------------------
+  - mode: data
+    path: /usr/local/bin/sonar-check
+    permissions: 755
+    content: |
+      #!/bin/bash
+      # Usage: sonar-check [-Dsonar.<prop>=<value> ...]   (devvm README, SonarQube)
+      set -euo pipefail
+      host=http://localhost:9000
+      token_file="$HOME/.config/sonar/token"
+      if [ ! -s "$token_file" ]; then
+        echo "sonar-check: no token in $token_file — see the SonarQube section of the devvm README." >&2
+        exit 2
+      fi
+      if ! curl -fsS "$host/api/system/status" | grep -q '"status":"UP"'; then
+        echo "sonar-check: SonarQube is not up at $host. Try: docker start sonarqube" >&2
+        exit 2
+      fi
+      token="$(cat "$token_file")"
+      root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      # A key in sonar-project.properties wins; otherwise the repo's directory name.
+      key="$(sed -n 's/^sonar\.projectKey=//p' "$root/sonar-project.properties" 2>/dev/null || true)"
+      key="${key:-$(basename "$root")}"
+
+      status=0
+      (cd "$root" && SONAR_TOKEN="$token" SONAR_HOST_URL="$host" \
+        sonar-scanner -Dsonar.projectKey="$key" -Dsonar.qualitygate.wait=true "$@") || status=$?
+
+      if [ "$status" -ne 0 ]; then
+        echo
+        echo "=== sonar-check: FAILED for $key ($host/dashboard?id=$key) ==="
+        echo "--- failed quality gate conditions ---"
+        curl -fsSu "$token:" "$host/api/qualitygates/project_status?projectKey=$key" \
+          | jq -r '.projectStatus.conditions[]? | select(.status == "ERROR")
+                   | "\(.metricKey): \(.actualValue) (fails when \(.comparator) \(.errorThreshold))"' || true
+        echo "--- open issues in new code (file:line rule message) ---"
+        curl -fsSu "$token:" "$host/api/issues/search?components=$key&resolved=false&inNewCodePeriod=true&ps=100" \
+          | jq -r '.issues[] | "\(.component | sub("^[^:]*:"; "")):\(.line // "-")  \(.rule)  \(.message)"' || true
+      else
+        echo "=== sonar-check: quality gate passed for $key ==="
+      fi
+      exit "$status"
 
   # ---------------------------------------------------------------------------
   # USER: the JS toolchain, owned by the login user.
@@ -694,6 +781,15 @@ probes:
       timeout 120s bash -c 'until systemctl is-active --quiet devvm-vnc.service; do sleep 2; done'
       timeout 30s bash -c 'until ss -ltn | grep -q "127.0.0.1:5901 "; do sleep 1; done'
     hint: "No viewable display. Check: limactl shell dev -- systemctl status devvm-display devvm-vnc"
+  - description: "SonarQube"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      command -v sonar-scanner
+      command -v sonar-check
+      # First start creates its database and indexes: allow a few minutes.
+      timeout 300s bash -c 'until curl -fsS http://localhost:9000/api/system/status | grep -q "\"status\":\"UP\""; do sleep 5; done'
+    hint: "SonarQube is not up. Check: limactl shell dev -- docker logs sonarqube"
 
 message: |
   Dev VM is up.

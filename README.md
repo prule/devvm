@@ -10,7 +10,8 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Claude Code desktop app ───SSH───► ├── ~/projects/current/…  every repo
 ├── JetBrains Gateway ───────SSH───►   ├── WebStorm backend (Gateway installs)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
-├── Browser → localhost:5173           ├── SDKMAN: Java 25 + 21, Playwright, Electron
+│                                      ├── SonarQube (Docker) + sonar-check
+├── Browser → localhost:5173, :9000    ├── SDKMAN: Java 25 + 21, Playwright, Electron
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -291,6 +292,77 @@ Things to know about Option B:
 
 - **It is not a backup.** `~/.lima` is excluded from Time Machine, so commits that exist only in the VM and on the host's `vm/*` refs are still unpushed work. Push anything you want to keep.
 
+## SonarQube
+
+`dev.yaml` runs [SonarQube Community Build](https://www.sonarsource.com/products/sonarqube/) in Docker and installs the scanner CLI, so any repo can be checked for bugs, code smells and security issues with one command. The main use is as a quality gate in the sdlc-pipeline's **Verify** step, so agents have to fix what it finds before they report done.
+
+| | |
+|---|---|
+| Server | `sonarqube` container, http://localhost:9000 (forwarded to the Mac at the same address) |
+| Scanner | `sonar-scanner`, on `PATH` |
+| `sonar-check` | Wrapper that scans the current repo and fails when the quality gate fails |
+
+### One-time setup
+
+Do this once per VM. A rebuild (`limactl delete`) wipes SonarQube's database along with everything else, so repeat it after one.
+
+1. Open http://localhost:9000 on the Mac, log in as `admin` / `admin`, and set a new password when asked.
+2. **My Account → Security → Generate Tokens.** Type **User token**, any name, choose an expiry. A user token carries the admin's *Create Projects* permission, which is what lets the first scan of a repo create its project. A project analysis token can't do that.
+3. Store it in the VM, readable only by you:
+
+   ```bash
+   mkdir -p ~/.config/sonar && (umask 077; cat > ~/.config/sonar/token)   # paste the token, then Enter and Ctrl-D
+   ```
+
+4. Check it from any repo:
+
+   ```bash
+   cd ~/projects/current/<repo> && sonar-check
+   ```
+
+### Scanning a repo
+
+`sonar-check` runs from anywhere in a git repo and scans the whole repo. It:
+
+- uses `sonar.projectKey` from `sonar-project.properties` if the repo has one, otherwise the repo's directory name;
+- creates the project in SonarQube on the first scan;
+- waits for the quality gate and exits non-zero if the gate fails. When it fails, it prints the failed gate conditions and the open issues in new code as `file:line rule message`, so an agent can fix them without opening the dashboard;
+- passes any extra arguments through to `sonar-scanner`, for example `sonar-check -Dsonar.exclusions=dist/**`.
+
+A repo needs no config to start. Add a `sonar-project.properties` at its root when you need to narrow the scan or feed in test coverage:
+
+```properties
+sonar.sources=src
+sonar.tests=test
+sonar.exclusions=**/generated/**
+# sonar.javascript.lcov.reportPaths=coverage/lcov.info
+# sonar.coverage.jacoco.xmlReportPaths=build/reports/jacoco/test/jacocoTestReport.xml
+```
+
+The scanner writes a `.scannerwork/` directory in the repo. Add it to the repo's `.gitignore`.
+
+**Run `sonar-check` once on the base branch when you start using it on a repo.** The quality gate judges *new code*: by default, anything changed since the first scan. The first scan sets that baseline and passes regardless, so if it happens in the middle of a pipeline run, that run's changes get a free pass.
+
+### In the sdlc-pipeline
+
+Every pipeline agent (implementer, qa, senior-dev) runs the **Verify** command from the repo's `.claude/sdlc-profile.md` and has to make it pass. Append `sonar-check` to it:
+
+```markdown
+- **Verify:** `pnpm test && sonar-check`.
+  Every agent runs this to prove its work and pastes the output. A failed SonarQube quality gate
+  is a failed Verify: fix the listed issues, don't suppress them with `// NOSONAR`.
+```
+
+Put it last. Tests are faster and fail first, and a scan takes from 30 seconds to a few minutes.
+
+To make reviewers judge Sonar findings as well as run the scan, add a line under the profile's **Review checklist → Code review**, such as: *SonarQube quality gate passes on new code; any `NOSONAR` needs a comment saying why.*
+
+### Limits of the Community Build
+
+- **No branch or pull-request analysis.** Each repo has one analysis, and every scan replaces it, whichever branch you are on. That's fine for one person working one branch at a time.
+- **About 2–3 GB of RAM** while running. If the VM feels tight, run `docker stop sonarqube`; it stays stopped until `docker start sonarqube`, even across reboots. `sonar-check` says so if it can't reach the server.
+- **Version bumps need a rebuild.** It uses the embedded H2 database, which SonarQube can't upgrade in place. The rebuild that a `SONARQUBE_VERSION` bump already requires starts it fresh. Redo the one-time setup afterwards.
+
 ## The rule
 
 > **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
@@ -335,7 +407,7 @@ Use the full rebuild above instead when a change is not additive: removing a pac
 
 ### Renovate
 
-[Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI or the `skills` CLI. It needs the Renovate GitHub App installed on this repo.
+[Renovate](https://docs.renovatebot.com/) opens a PR when a new version is released for Node, pnpm, OpenSpec, the Supabase CLI, the `skills` CLI, SonarQube or the SonarScanner CLI. It needs the Renovate GitHub App installed on this repo.
 
 Each pin in `param:` has a comment directly above it that tells Renovate where to look:
 
@@ -359,7 +431,7 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 - **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because some projects pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
 - **`java` must agree across shell modes.** `/etc/environment` puts `JAVA_HOME` and a `java` entry at the **tail** of `PATH`. The tail position is load-bearing: `sdkman-init` prepends its own entry in interactive shells and `sdk use`/`sdk env` rewrites *that* one, so a `java` ahead of it wins and silently breaks per-project switching — `sdk env` reports 21 while `java -version` still says 25.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
-- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324); the robust fix is still `server: { host: true }` in `vite.config.ts`.
+- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324, 9000 for SonarQube); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
 - **No agent forwarding, on purpose.** `bootstrap.sh` strips `ForwardAgent yes` if a regenerated SSH block ever introduces one. The VM has its own GitHub key.
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.
