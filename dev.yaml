@@ -163,6 +163,9 @@ param:
   SONARQUBE_VERSION: "26.9.0.129388-community"
   # renovate: datasource=github-releases depName=SonarSource/sonar-scanner-cli
   SONAR_SCANNER_VERSION: "8.2.0.6438"
+  # MkDocs with the Material theme, for docs sites such as project-setup's.
+  # renovate: datasource=pypi depName=mkdocs-material
+  MKDOCS_MATERIAL_VERSION: "9.7.7"
   # The dev database (container), and the major of the psql client too. A
   # major bump needs a rebuild: Postgres data directories do not carry across
   # majors without a dump and restore.
@@ -206,9 +209,11 @@ provision:
 
       # python3-venv: project-local virtualenvs (e.g. docs/explainer/tts uses
       # one for Piper). Ubuntu's python3 ships without ensurepip.
+      # pipx: Python CLIs (mkdocs) in their own venvs, since Ubuntu's python3
+      # refuses a global `pip install` (PEP 668).
       apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
-        build-essential python3-venv
+        build-essential python3-venv pipx
 
       # --- Postgres client ----------------------------------------------------
       # psql is how the migration scripts run raw SQL against the shared
@@ -736,6 +741,23 @@ provision:
       done
 
   # ---------------------------------------------------------------------------
+  # USER: MkDocs + Material, so a docs repo's `./run serve` / `./run build`
+  # works (project-setup's `./run setup` does a global `pip install`, which
+  # Ubuntu refuses). pipx gives it its own venv; --include-deps exposes the
+  # `mkdocs` binary, which comes from a dependency, on ~/.local/bin.
+  # Reinstalled only when the pinned version changes. Best-effort.
+  # ---------------------------------------------------------------------------
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      want="mkdocs-material ${PARAM_MKDOCS_MATERIAL_VERSION}"
+      if [ "$(pipx list --short 2>/dev/null | grep '^mkdocs-material ')" != "$want" ]; then
+        pipx install --force --include-deps "mkdocs-material==${PARAM_MKDOCS_MATERIAL_VERSION}" \
+          || echo "! mkdocs skipped — run 'pipx install --include-deps mkdocs-material' later"
+      fi
+
+  # ---------------------------------------------------------------------------
   # USER: the `claude` CLI, for a shell in the VM (`ssh lima-dev`, Gateway's
   # terminal). The desktop app installs its own copy on first connect, but
   # under ~/.claude/remote/ccd-cli/<version>, which is not on PATH and changes
@@ -875,6 +897,12 @@ probes:
       # First start creates its database and indexes: allow a few minutes.
       timeout 300s bash -c 'until curl -fsS http://localhost:9000/api/system/status | grep -q "\"status\":\"UP\""; do sleep 5; done'
     hint: "SonarQube is not up. Check: limactl shell dev -- docker logs sonarqube"
+  - description: "MkDocs"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      "$HOME/.local/bin/mkdocs" --version
+    hint: "mkdocs is missing. Run in the VM: pipx install --include-deps mkdocs-material"
   - description: "Postgres (dev database)"
     script: |
       #!/bin/bash
