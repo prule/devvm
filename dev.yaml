@@ -726,6 +726,7 @@ provision:
       skills='
       danyuchn/asd-ste100-skill asd-ste100
       mattpocock/skills setup-matt-pocock-skills
+      prule/project-setup vssw-audit-project-compliance
       '
       echo "$skills" | while read -r repo name; do
         [ -n "$repo" ] || continue
