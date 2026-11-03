@@ -152,7 +152,7 @@ param:
   SUPABASE_CLI_VERSION: "2.115.0"
   # The `skills` CLI (npx skills add ...) that installs Claude Code skills.
   # renovate: datasource=npm depName=skills
-  SKILLS_CLI_VERSION: "1.7.4"
+  SKILLS_CLI_VERSION: "1.7.6"
   # SonarQube Community Build (container) and the scanner that feeds it.
   # renovate: datasource=docker depName=sonarqube
   SONARQUBE_VERSION: "26.9.0.129388-community"
