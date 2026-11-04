@@ -558,10 +558,9 @@ provision:
       export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"
 
       # --- fnm + one Node -----------------------------------------------------
-      # fnm stays, but its job changed. In the containers it auto-switched Node
-      # per directory (--use-on-cd) to honour each repo's .node-version pin.
-      # Here there is ONE version for every project, so fnm is only the
-      # mechanism for bumping it. Deliberately no --use-on-cd.
+      # fnm installs one default Node for every project, and interactive shells
+      # get --use-on-cd so a repo's .node-version / .nvmrc pin still wins
+      # inside that repo (see the shell wiring below).
       if [ ! -x "$FNM_DIR/fnm" ]; then
         curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell
       fi
@@ -599,7 +598,6 @@ provision:
       # terminate this YAML block scalar early.
       #
       # NOT written here, deliberately:
-      #   --use-on-cd            one Node version now; fnm only bumps it
       #   PLAYWRIGHT_BROWSERS_PATH / PLAYWRIGHT_SKIP_BROWSER_GC
       #     The shared browser volume needed both. Playwright's .links files
       #     hold absolute paths into a per-project node_modules volume that
@@ -621,7 +619,7 @@ provision:
             echo 'export FNM_DIR="$HOME/.fnm"'
             echo 'export PNPM_HOME="$HOME/.local/share/pnpm"'
             echo 'export PATH="$FNM_DIR:$PNPM_HOME/bin:$PATH"'
-            echo "eval \"\$(fnm env --shell ${shell})\""
+            echo "eval \"\$(fnm env --use-on-cd --shell ${shell})\""
             echo 'export OPENSPEC_TELEMETRY=0'
             echo ''
             echo '# Layer 4 of the pnpm guard, and the only one that fires before'
@@ -633,6 +631,8 @@ provision:
             echo 'npm() { case "$1" in install|i|ci|add|update) if [ -f pnpm-lock.yaml ]; then printf "%s\n" "pnpm-lock.yaml present - use pnpm, not npm" >&2; return 1; fi ;; esac; command npm "$@"; }'
           } >> "$rc"
         fi
+        # rc files written before --use-on-cd was added skip the block above; upgrade them in place.
+        sed -i 's/fnm env --shell/fnm env --use-on-cd --shell/' "$rc"
       done
 
       # Where the repos get cloned. Mirrors the host layout out of habit, so
