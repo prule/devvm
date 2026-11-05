@@ -165,7 +165,7 @@ param:
   SONAR_SCANNER_VERSION: "8.2.0.6438"
   # MkDocs with the Material theme, for docs sites such as project-setup's.
   # renovate: datasource=pypi depName=mkdocs-material
-  MKDOCS_MATERIAL_VERSION: "9.7.7"
+  MKDOCS_MATERIAL_VERSION: "9.8.0"
   # Hugo (extended, for themes that compile SCSS), for pauls-blog. Kept equal
   # to HUGO_VERSION in pauls-blog's .github/workflows/hugo.yml, so a local
   # build matches the deploy. Bump the two together.
