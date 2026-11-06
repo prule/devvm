@@ -36,6 +36,22 @@ MSG
 fi
 
 # --- 2. Lima ------------------------------------------------------------------
+# Homebrew is the one host prerequisite (see README "Quickstart"). Not installed
+# from here: its installer is interactive and asks for sudo, so it is the
+# user's call to run it.
+if ! command -v limactl >/dev/null && ! command -v brew >/dev/null; then
+  cat >&2 <<'MSG'
+Homebrew is not installed (or not on PATH). It is needed to install Lima.
+
+  Install it from https://brew.sh, which gives the current one-line command.
+
+  When the installer finishes, it prints two or three "Next steps" commands
+  that add brew to your PATH. Run those, open a new terminal, check with
+    brew --version
+  and then re-run ./bootstrap.sh.
+MSG
+  exit 1
+fi
 command -v limactl >/dev/null || { say "Installing Lima"; brew install lima; }
 
 if limactl list --quiet 2>/dev/null | grep -qx "$VM_NAME"; then

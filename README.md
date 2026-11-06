@@ -34,6 +34,8 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 
 ## Quickstart
 
+**Prerequisite:** [Homebrew](https://brew.sh) on the Mac. `bootstrap.sh` uses it to install Lima, but it does not install Homebrew itself. Check with `brew --version`. If it is missing, install it from https://brew.sh first. Nothing else is needed on the host: Docker runs inside the VM, so you do not need Docker Desktop or Colima.
+
 ```bash
 ./bootstrap.sh
 limactl copy setup-github.sh dev:/tmp/ && limactl shell dev -- bash /tmp/setup-github.sh
