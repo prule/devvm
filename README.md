@@ -438,7 +438,7 @@ The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, whi
 
 It pulls, drops the shared SSH connection, stops the VM, copies `dev.yaml` over `~/.lima/dev/lima.yaml`, and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block for the new port. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
 
-Each provision step skips work it already did (the skills step skips any skill whose `SKILL.md` exists), so a restart re-runs them quickly. Check the result:
+Each provision step skips work it already did (the skills step installs only skills whose `SKILL.md` is missing), so a restart re-runs them quickly. Two steps also update on every boot: plugins move to their latest version, and `npx skills update -g` re-copies any skill that changed on GitHub (overwriting local edits to it). Check the result:
 
 ```bash
 limactl shell dev -- ls ~/.claude/skills

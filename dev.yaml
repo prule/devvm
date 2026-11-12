@@ -768,6 +768,14 @@ provision:
           || echo "! skill $name skipped — run 'npx skills add $repo -g -a claude-code' later"
       done
 
+      # Then bring every installed skill to its latest version, as the plugin
+      # step does for plugins. `add` records each skill's source and folder
+      # hash in ~/.agents/.skill-lock.json, copies included; `update` compares
+      # those hashes with GitHub and re-copies only the changed skills.
+      # It overwrites local edits to a skill.
+      timeout 300s npx --yes "skills@${PARAM_SKILLS_CLI_VERSION}" update -g -y < /dev/null \
+        || echo "! skills not updated — run 'npx skills update -g -y' later"
+
   # ---------------------------------------------------------------------------
   # USER: MkDocs + Material, so a docs repo's `./run serve` / `./run build`
   # works (project-setup's `./run setup` does a global `pip install`, which
