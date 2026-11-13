@@ -170,7 +170,7 @@ param:
   # to HUGO_VERSION in pauls-blog's .github/workflows/hugo.yml, so a local
   # build matches the deploy. Bump the two together.
   # renovate: datasource=github-releases depName=gohugoio/hugo extractVersion=^v(?<version>.*)$
-  HUGO_VERSION: "0.169.0"
+  HUGO_VERSION: "0.170.0"
   # The dev database (container), and the major of the psql client too. A
   # major bump needs a rebuild: Postgres data directories do not carry across
   # majors without a dump and restore.
