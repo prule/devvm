@@ -107,7 +107,12 @@ containerd:
 #   5901 x11vnc for display :99 — localhost-only by design, so it must be here
 #   9000 sonarqube — published on 127.0.0.1 only, same reasoning
 #   5432 postgres (the dev database, not Supabase's) — same again
+#   1313 hugo server for pauls-blog (blog-serve) — same again
 portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1313, 1313]
+    hostIP: "127.0.0.1"
+    hostPortRange: [1313, 1313]
   - guestIP: "127.0.0.1"
     guestPortRange: [5432, 5432]
     hostIP: "127.0.0.1"
@@ -564,6 +569,62 @@ provision:
         rm -rf "$tmp"
       fi
 
+      # --- Live preview of pauls-blog, always running ---------------------------
+      # `blog-serve` (below) under systemd, so the blog with drafts is at
+      # http://localhost:1313/pauls-blog/ on the Mac whenever the VM is up.
+      # Restart=always rather than on-failure: before the blog is cloned the
+      # script exits, and this keeps retrying until the checkout appears,
+      # without needing another boot. Same login-user lookup as the first step.
+      LOGIN_USER="$(awk -F: '$3>=500 && $3<65000 && $6 ~ /^\/home\// {print $1; exit}' /etc/passwd)"
+      printf '%s\n' \
+        '[Unit]' \
+        'Description=Hugo dev server for pauls-blog (drafts, live reload)' \
+        'After=network.target' \
+        '[Service]' \
+        "User=$LOGIN_USER" \
+        'ExecStart=/usr/local/bin/blog-serve' \
+        'Restart=always' \
+        'RestartSec=30' \
+        '[Install]' \
+        'WantedBy=multi-user.target' \
+        > /etc/systemd/system/devvm-blog.service
+      systemctl daemon-reload
+      systemctl enable devvm-blog.service
+      # restart, not start: picks up a new Hugo or a changed blog-serve on
+      # ./update-vm.sh, where the service may already be running.
+      systemctl restart devvm-blog.service || echo "! devvm-blog did not start — see: systemctl status devvm-blog"
+
+  # ---------------------------------------------------------------------------
+  # DATA: `blog-serve`, Hugo's dev server for pauls-blog: drafts included (-D),
+  # rebuilds and live-reloads the browser on every save. devvm-blog.service
+  # (above) runs it on boot; run it by hand after `systemctl stop devvm-blog`
+  # to see its output in a terminal, or pass extra flags (e.g. -F for
+  # future-dated posts). Binds 127.0.0.1, so the portForwards entry for 1313
+  # is what makes it reachable from the Mac.
+  # ---------------------------------------------------------------------------
+  - mode: data
+    path: /usr/local/bin/blog-serve
+    permissions: 755
+    content: |
+      #!/bin/bash
+      # Usage: blog-serve [extra hugo server flags]   (devvm README, Blog preview)
+      set -euo pipefail
+      blog="${BLOG_DIR:-$HOME/projects/current/pauls-blog}"
+      if [ ! -f "$blog/hugo.toml" ]; then
+        echo "blog-serve: no Hugo site at $blog (set BLOG_DIR, or clone pauls-blog)" >&2
+        exit 1
+      fi
+      cd "$blog"
+      # The theme is a submodule; without it Hugo starts and serves blank pages.
+      if [ -z "$(ls -A themes/hugo-simple-beauty 2>/dev/null)" ]; then
+        git submodule update --init --recursive
+      fi
+      exec hugo server \
+        --buildDrafts \
+        --bind 127.0.0.1 --port 1313 \
+        --disableFastRender \
+        "$@"
+
   # ---------------------------------------------------------------------------
   # USER: the JS toolchain, owned by the login user.
   #
@@ -825,6 +886,30 @@ provision:
           echo 'export PATH="$HOME/.local/bin:$PATH"'
         } >> "$rc"
       done
+
+  # ---------------------------------------------------------------------------
+  # DATA: the user-wide ~/.claude/CLAUDE.md, instructions every Claude Code
+  # session in the VM reads. Staged root-owned here and copied into place by
+  # the next step: a data file written straight into ~/.claude could create
+  # that directory as root on a fresh VM, before anything else exists there.
+  # Rewritten on every boot, so edit it HERE, not in the VM. The Mac has its
+  # own ~/.claude/CLAUDE.md; keep the two in step.
+  # ---------------------------------------------------------------------------
+  - mode: data
+    path: /usr/local/share/devvm/CLAUDE.md
+    content: |
+      # User-wide instructions
+
+      <!-- Generated from devvm/dev.yaml on every boot. Edit it there; changes made here are lost on restart. -->
+
+      - When linking to an HTML page in a GitHub repo, prepend `https://htmlpreview.github.io/?` to the GitHub URL so the page renders instead of showing its source, e.g. `https://htmlpreview.github.io/?https://github.com/owner/repo/blob/main/page.html`.
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      mkdir -p "$HOME/.claude"
+      install -m 644 /usr/local/share/devvm/CLAUDE.md "$HOME/.claude/CLAUDE.md"
 
   # ---------------------------------------------------------------------------
   # USER: Claude Code plugins, user-level. First declare the marketplace and

@@ -12,7 +12,8 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 │                                      ├── SonarQube (Docker) + sonar-check
 │                                      ├── Postgres (Docker): dev_ro + dev_rw
-├── Browser → localhost:5173, :9000    ├── SDKMAN: Java 25 + 21, Playwright, Electron
+├── Browser → localhost:5173, :9000,   ├── SDKMAN: Java 25 + 21, Playwright, Electron
+│       :1313 (blog preview)           ├── Hugo dev server for pauls-blog
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -295,6 +296,34 @@ Things to know about Option B:
 
 - **It is not a backup.** `~/.lima` is excluded from Time Machine, so commits that exist only in the VM and on the host's `vm/*` refs are still unpushed work. Push anything you want to keep.
 
+## Blog preview (Hugo)
+
+`dev.yaml` keeps Hugo's dev server for `pauls-blog` running whenever the VM is up. On the Mac, open:
+
+http://localhost:1313/pauls-blog/
+
+It includes drafts, and rebuilds and reloads the browser tab every time you save a file. The `/pauls-blog/` path comes from the blog's `baseURL`, so links work the same as on GitHub Pages.
+
+How it is set up:
+
+- **`blog-serve`** (in `/usr/local/bin`) runs `hugo server --buildDrafts --disableFastRender` in `~/projects/current/pauls-blog`, bound to the VM's localhost on port 1313. The `portForwards` entry makes it reachable from the Mac. If the theme submodule is empty, the script initialises it first. Extra arguments go to `hugo server`, for example `blog-serve -F` to also show posts with a future date.
+- **`devvm-blog.service`** runs `blog-serve` on boot. It uses `Restart=always`, so if the blog is not cloned yet, the service retries every 30 seconds and starts when the checkout appears.
+
+To see Hugo's output (build errors, for example):
+
+```bash
+ssh lima-dev journalctl -u devvm-blog -f
+```
+
+To run it in a terminal instead, stop the service first, because only one server can use port 1313:
+
+```bash
+ssh lima-dev sudo systemctl stop devvm-blog
+ssh lima-dev blog-serve
+```
+
+`sudo systemctl start devvm-blog` (or a VM restart) puts it back.
+
 ## SonarQube
 
 `dev.yaml` runs [SonarQube Community Build](https://www.sonarsource.com/products/sonarqube/) in Docker and installs the scanner CLI, so any repo can be checked for bugs, code smells and security issues with one command. The main use is as a quality gate in the sdlc-pipeline's **Verify** step, so agents have to fix what it finds before they report done.
@@ -445,6 +474,8 @@ limactl shell dev -- ls ~/.claude/skills
 ```
 
 A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
+
+The user-wide `~/.claude/CLAUDE.md` (instructions every Claude Code session in the VM reads) is also rewritten on every boot, from the `CLAUDE.md` data entry in `dev.yaml`. Add or change an instruction there, not in the VM, or the next restart undoes it. The Mac has its own `~/.claude/CLAUDE.md` for sessions run on the host; keep the two in step.
 
 Plugins (currently `sdlc-pipeline` and `ponytail`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI install is best-effort and may not have happened yet. Enabling a plugin there does not install it. So once a `claude` CLI exists (the provisioned `~/.local/bin/claude`, or the desktop app's own copy), every boot also adds a missing marketplace, installs a missing plugin, and runs `claude plugin marketplace update` and `claude plugin update` (user scope) for the rest, so a restart installs a newly listed plugin and brings the others to their latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add <owner>/<repo>` and `claude plugin install <plugin>@<marketplace>` there, with the values from the plugins list in `dev.yaml` (for example `prule/sdlc-pipeline` and `sdlc-pipeline@sdlc-pipeline`).
 

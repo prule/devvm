@@ -17,9 +17,13 @@ say() { printf '\n==> %s\n' "$*"; }
 # The VM disk is sparse, but it still needs somewhere to grow. On this machine
 # the space comes from Docker Desktop (~47GB) — quit it and delete its data
 # BEFORE creating the VM, not after.
+# Only gates creating the VM: restarting an existing one (update-vm.sh) does
+# not need the headroom up front, and refusing there leaves the VM stopped.
+vm_exists=false
+command -v limactl >/dev/null && limactl list --quiet 2>/dev/null | grep -qx "$VM_NAME" && vm_exists=true
 avail_gb=$(df -g / | awk 'NR==2 {print $4}')
-say "Free disk: ${avail_gb}GB (want >= ${DISK_NEEDED_GB}GB)"
-if [ "$avail_gb" -lt "$DISK_NEEDED_GB" ]; then
+say "Free disk: ${avail_gb}GB (want >= ${DISK_NEEDED_GB}GB to create the VM)"
+if [ "$vm_exists" = false ] && [ "$avail_gb" -lt "$DISK_NEEDED_GB" ]; then
   cat >&2 <<MSG
 Not enough free disk.
 
