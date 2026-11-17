@@ -181,7 +181,7 @@ param:
   # to HUGO_VERSION in pauls-blog's .github/workflows/hugo.yml, so a local
   # build matches the deploy. Bump the two together.
   # renovate: datasource=github-releases depName=gohugoio/hugo extractVersion=^v(?<version>.*)$
-  HUGO_VERSION: "0.169.0"
+  HUGO_VERSION: "0.170.1"
   # gitleaks, the secret scanner every repo's pre-commit hook runs (see
   # devvm-secret-scan below).
   # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.*)$
