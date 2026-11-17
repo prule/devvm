@@ -141,18 +141,14 @@ If it fails with `Connection refused`, see the SSH port note under **Two things 
 
 ### Java
 
-VS Code is the free way to work on Java in the VM (IntelliJ IDEA needs a paid subscription for this; see **WebStorm → Java**). While connected to `lima-dev`, install Microsoft's **Extension Pack for Java**. It installs on the VM side and brings Red Hat's Java language server, the debugger, the test runner, and Maven and Gradle support. Then **File → Open Folder…** → the repo.
+VS Code is the free way to work on Java in the VM (IntelliJ IDEA needs a paid subscription for this; see **WebStorm → Java**). It uses Microsoft's **Extension Pack for Java**, which runs on the VM side and brings Red Hat's Java language server, the debugger, the test runner, and Maven and Gradle support. Connect to `lima-dev`, then **File → Open Folder…** → the repo.
 
-Point it at the SDKMAN JDKs, so it doesn't look for others: ⇧⌘P → **Preferences: Open Remote Settings (SSH: lima-dev)**, and add:
+`dev.yaml` sets this up on every boot:
 
-```json
-"java.configuration.runtimes": [
-  { "name": "JavaSE-25", "path": "/home/paulrule.guest/.sdkman/candidates/java/25.0.4-tem", "default": true },
-  { "name": "JavaSE-21", "path": "/home/paulrule.guest/.sdkman/candidates/java/21.0.12-tem" }
-]
-```
+- **The extension pack** is installed through the VS Code server in the VM. That server only exists after VS Code has connected once, so on a fresh VM, either install the pack from the Extensions view while connected, or run `./update-vm.sh` after the first connect. After that, VS Code keeps it updated.
+- **The JDKs:** `java.configuration.runtimes` in the remote settings (⇧⌘P → **Preferences: Open Remote Settings (SSH: lima-dev)**) lists one entry per `JAVA_VERSIONS`, with `JAVA_DEFAULT` as the default. That key is rewritten on each boot, so change the JDKs in `dev.yaml`, not there. The rest of the file is yours. A settings file with comments can't be merged; the boot then warns and leaves it alone.
 
-These are absolute paths, as remote settings don't expand `~`. Update them when `JAVA_VERSIONS` in `dev.yaml` changes. Gradle builds still resolve their JDK from `jvmToolchain(...)` (see **JVM versions**), so this mainly affects the editor and plain Maven projects.
+Gradle builds still resolve their JDK from `jvmToolchain(...)` (see **JVM versions**), so the runtimes setting mainly affects the editor and plain Maven projects.
 
 Things to know:
 
@@ -160,6 +156,7 @@ Things to know:
 - **The language server is a JVM too,** about 1–2 GB per open window. If the VM is short on memory, ⇧⌘P → **Java: Clean Java Language Server Workspace** resets a server that has grown or got confused.
 - **Refactoring and Gradle work** are weaker than in IntelliJ, but completion, navigation, debugging and running tests all work.
 
+## Checking out the projects
 
 `clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`. Generate it on the host from your existing checkout:
 
