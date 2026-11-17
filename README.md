@@ -112,7 +112,17 @@ It is also why there is no shared folder. A writable mount of `~/projects/curren
 
 `dev.yaml` provisions the two things the backend needs from the OS: a few X/font libraries, and `fs.inotify.max_user_watches = 524288` (below roughly that, the IntelliJ platform stops watching files and falls back to recursive rescans).
 
-## VS Code (browsing and copying files)
+### Java: use IntelliJ IDEA, not WebStorm
+
+WebStorm has no Java support: no completion, refactoring, Gradle import or Java debugger, and the Java plugin can't be installed into it. For Java, choose **IntelliJ IDEA** in Gateway's IDE dropdown in place of WebStorm.
+
+- **Remote development needs a paid subscription.** IntelliJ IDEA has been one download with a free tier since 2025.3. The free tier covers Java, Kotlin, Gradle and Maven, plus basic JavaScript/TypeScript since 2026.1. Gateway's remote mode is not in it, though, so the free tier can only open code on the Mac, and here the code lives only in the VM. Without a subscription, use VS Code for Java (see **VS Code → Java** below).
+- **Ultimate covers what WebStorm does,** so one IntelliJ backend can serve Java and TypeScript repos, instead of two.
+- **Each backend is its own JVM in the VM** (roughly 2–4 GB). WebStorm and IntelliJ backends running at once take a real share of the VM's 14 GiB, next to SonarQube and Postgres.
+- **JDK:** set the project SDK to SDKMAN's install, `~/.sdkman/candidates/java/25.0.4-tem` or `21.0.12-tem` (see **JVM versions**).
+- **Turn off SSH agent forwarding** in the IntelliJ window too, as for WebStorm above. It is a separate setting per IDE.
+
+## VS Code (files, Docker, Java)
 
 There is no shared folder, so moving files between the Mac and the VM needs a client on the Mac. VS Code's Remote-SSH gives you a file tree you can drag and drop into.
 
@@ -129,7 +139,27 @@ Install the **Remote - SSH** extension (Microsoft), then ⇧⌘P → **Remote-SS
 
 If it fails with `Connection refused`, see the SSH port note under **Two things that will catch you out**.
 
-## Checking out the projects
+### Java
+
+VS Code is the free way to work on Java in the VM (IntelliJ IDEA needs a paid subscription for this; see **WebStorm → Java**). While connected to `lima-dev`, install Microsoft's **Extension Pack for Java**. It installs on the VM side and brings Red Hat's Java language server, the debugger, the test runner, and Maven and Gradle support. Then **File → Open Folder…** → the repo.
+
+Point it at the SDKMAN JDKs, so it doesn't look for others: ⇧⌘P → **Preferences: Open Remote Settings (SSH: lima-dev)**, and add:
+
+```json
+"java.configuration.runtimes": [
+  { "name": "JavaSE-25", "path": "/home/paulrule.guest/.sdkman/candidates/java/25.0.4-tem", "default": true },
+  { "name": "JavaSE-21", "path": "/home/paulrule.guest/.sdkman/candidates/java/21.0.12-tem" }
+]
+```
+
+These are absolute paths, as remote settings don't expand `~`. Update them when `JAVA_VERSIONS` in `dev.yaml` changes. Gradle builds still resolve their JDK from `jvmToolchain(...)` (see **JVM versions**), so this mainly affects the editor and plain Maven projects.
+
+Things to know:
+
+- **Kotlin is limited in VS Code.** The Java pack doesn't cover it. For Kotlin-heavy repos, IntelliJ is much better.
+- **The language server is a JVM too,** about 1–2 GB per open window. If the VM is short on memory, ⇧⌘P → **Java: Clean Java Language Server Workspace** resets a server that has grown or got confused.
+- **Refactoring and Gradle work** are weaker than in IntelliJ, but completion, navigation, debugging and running tests all work.
+
 
 `clone-all.sh` reads `repos.tsv` — a manifest of `path  owner/repo  branch`. Generate it on the host from your existing checkout:
 
