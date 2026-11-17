@@ -95,6 +95,17 @@ Gateway → **SSH** → `lima-dev` → pick a project under `~/projects/current`
 
 **Turn off SSH agent forwarding** in the WebStorm window, once: **Settings → Tools → SSH Agent Forwarding**, clear **Enable SSH agent Forwarding**. When it is on, the client passes the Mac's SSH agent into the VM. Then whenever git in the VM needs a key (a background fetch, say), it asks for the passphrase of the Mac's `~/.ssh/id_rsa` ("Failed to load specified key … ssh-add"). The VM does not need it: it has its own GitHub key from `setup-github.sh`, and keeping the Mac's keys out of the VM is the same reason `bootstrap.sh` strips `ForwardAgent`.
 
+### Several repos in one window
+
+WebStorm has no tabs for separate projects. Instead, one project holds several directories, and WebStorm finds each one's `.git`. The Git tool window, the branch widget and the commit dialog then handle each repo separately (one commit per repo). There are two ways to set it up:
+
+- **Add repos to a project (recommended):** open one repo, then **Settings → Directories → Add Content Root** and pick the others. Each appears as a top-level folder in the Project view.
+- **Open a parent folder:** choose a folder holding the repos as the project directory in Gateway.
+
+Avoid opening all of `~/projects/current`. WebStorm would index every repo, `node_modules` and build folder included, competing for the VM's memory with SonarQube, Postgres and Claude sessions. If you do, right-click the repos you aren't using → **Mark Directory as → Excluded**.
+
+Each run configuration has its own working directory, so point it at the right repo. Node is one interpreter for the whole project, unlike fnm's per-repo switching in a terminal, so set it per run configuration when repos pin different versions. Each repo's `tsconfig.json` and ESLint config are still picked up separately.
+
 This is the same architecture the dev containers used via `"jetbrains": { "backend": "WebStorm" }` — IDE backend next to the code, GUI on the host.
 
 It is also why there is no shared folder. A writable mount of `~/projects/current` would put `node_modules` on both sides of the boundary, where native binaries (esbuild, rollup, sharp) belong to whichever OS installed last — exactly what the containers' per-project `node_modules` volumes prevented. Keeping `node_modules` VM-local instead left the host IDE unable to resolve an import. Moving the IDE to the code's side of the boundary dissolves the problem rather than trading around it, and JetBrains wants local disk for the backend anyway — network filesystems are explicitly unsupported.
