@@ -88,6 +88,12 @@ ssh:
   # the VM has its own key for GitHub (see setup-github.sh) and access is via
   # Lima's generated key, so there is no reason to link the two identities.
   loadDotSSHPubKeys: false
+  # A fixed host port, not Lima's default of a new random one on every start.
+  # Clients that store the port themselves, such as Gateway (its SSH
+  # connection has a required port field that overrides ~/.ssh/config),
+  # otherwise break on every restart. Pick another free port if this one is
+  # taken; a change needs ./update-vm.sh, which rewrites ~/.ssh/config.
+  localPort: 60022
 
 # Lima ships containerd/nerdctl by default. We install Docker Engine instead
 # (below), so leaving these on would waste several GB for nothing.

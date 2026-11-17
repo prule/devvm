@@ -75,13 +75,7 @@ limactl shell dev     # Lima's own, no SSH config needed
 
 ### Two things that will catch you out
 
-**The SSH port changes when the VM restarts.** Lima picks a new forwarded port each time, so the `~/.ssh/config` block goes stale and `ssh lima-dev` fails with `Connection refused`. Re-run `./bootstrap.sh` (idempotent — it rewrites the block), or just:
-
-```bash
-limactl show-ssh dev --format=config    # shows the current port
-```
-
-A saved connection in the desktop app or Gateway will need the same refresh. `limactl shell dev` is unaffected, which makes it the better choice when something looks broken.
+**The SSH port is pinned to 60022** (`ssh.localPort` in `dev.yaml`). By default Lima picks a new random port every time the VM starts, which left the `~/.ssh/config` block and Gateway's saved connection pointing at a dead port after each restart. Gateway in particular stores a port of its own that overrides `~/.ssh/config`, so in its SSH connection set **Port** to `60022`. If `ssh lima-dev` ever fails with `Connection refused`, check that the VM is running (`limactl list`) and that the block is current (`./bootstrap.sh` rewrites it). `limactl shell dev` doesn't depend on any of this, which makes it the better choice when something looks broken.
 
 **Lima multiplexes SSH through a control master,** so a connection can outlive a change you just made inside the VM. Group membership is the usual victim: after provisioning added the login user to `docker`, every `docker` command still failed with `permission denied` because the session predated it. Drop the shared connection and reconnect:
 
@@ -98,6 +92,8 @@ brew install --cask jetbrains-gateway
 ```
 
 Gateway → **SSH** → `lima-dev` → pick a project under `~/projects/current`. It downloads the WebStorm backend into the VM on first connect; the thin client is the only JetBrains process on the Mac.
+
+**Turn off SSH agent forwarding** in the WebStorm window, once: **Settings → Tools → SSH Agent Forwarding**, clear **Enable SSH agent Forwarding**. When it is on, the client passes the Mac's SSH agent into the VM. Then whenever git in the VM needs a key (a background fetch, say), it asks for the passphrase of the Mac's `~/.ssh/id_rsa` ("Failed to load specified key … ssh-add"). The VM does not need it: it has its own GitHub key from `setup-github.sh`, and keeping the Mac's keys out of the VM is the same reason `bootstrap.sh` strips `ForwardAgent`.
 
 This is the same architecture the dev containers used via `"jetbrains": { "backend": "WebStorm" }` — IDE backend next to the code, GUI on the host.
 
@@ -120,7 +116,7 @@ Install the **Remote - SSH** extension (Microsoft), then ⇧⌘P → **Remote-SS
 
 **Docker containers:** while connected, install the **Container Tools** extension (it installs on the VM side). Expand a running container → **Files** to browse it and download files from it. If it reports `permission denied` on Docker, the VS Code server predates the `docker` group change. Run **Remote-SSH: Kill VS Code Server on Host…** and reconnect.
 
-The SSH port gotcha above applies here too: after a VM restart, re-run `./bootstrap.sh` before reconnecting.
+If it fails with `Connection refused`, see the SSH port note under **Two things that will catch you out**.
 
 ## Checking out the projects
 
@@ -281,7 +277,7 @@ git pull vm my-branch                   # after that
 
 Things to know about Option B:
 
-- **After a VM restart, re-run `./bootstrap.sh` first.** Otherwise `git fetch vm` fails with `Connection refused` because the SSH port changed (see **Two things that will catch you out**).
+- **`git fetch vm` fails with `Connection refused`** when the VM is stopped or the `~/.ssh/config` block is stale (see **Two things that will catch you out**).
 - **Sending host commits back:** git refuses to push into the branch the VM has checked out. Push under a different name and merge it in the VM:
 
   ```bash
@@ -491,7 +487,7 @@ The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, whi
 ./update-vm.sh
 ```
 
-It pulls, drops the shared SSH connection, stops the VM, copies `dev.yaml` over `~/.lima/dev/lima.yaml`, and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block for the new port. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
+It pulls, drops the shared SSH connection, stops the VM, copies `dev.yaml` over `~/.lima/dev/lima.yaml`, and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
 
 Each provision step skips work it already did (the skills step installs only skills whose `SKILL.md` is missing), so a restart re-runs them quickly. Two steps also update on every boot: plugins move to their latest version, and `npx skills update -g` re-copies any skill that changed on GitHub (overwriting local edits to it). Check the result:
 

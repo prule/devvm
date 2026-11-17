@@ -28,7 +28,7 @@ say "Replacing ~/.lima/$VM_NAME/lima.yaml with dev.yaml"
 cp "$HERE/dev.yaml" "$HOME/.lima/$VM_NAME/lima.yaml"
 
 # Starts the VM (provision runs on boot) and rewrites the ~/.ssh/config block,
-# whose port changed with the restart.
+# in case dev.yaml changed the SSH port (ssh.localPort) or the key.
 "$HERE/bootstrap.sh"
 
 # Best-effort provision steps warn with a leading "! " rather than failing the
