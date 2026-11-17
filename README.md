@@ -14,7 +14,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 │                                      ├── Postgres (Docker): dev_ro + dev_rw
 ├── Browser → localhost:5173, :9000,   ├── SDKMAN: Java 25 + 21, Playwright, Electron
 │       :1313 (blog preview)           ├── Hugo dev server for pauls-blog
-├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI
+├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, gitleaks
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
 Two thin clients on the Mac, one box doing the work. No shared folders.
@@ -323,6 +323,32 @@ ssh lima-dev blog-serve
 ```
 
 `sudo systemctl start devvm-blog` (or a VM restart) puts it back.
+
+## Secret scanning
+
+Every commit in the VM is checked for secrets (API keys, tokens, private keys, passwords in connection strings) by [gitleaks](https://github.com/gitleaks/gitleaks) before it is made. If gitleaks finds one, the commit is refused and the output shows the file, the line and the rule, with the secret itself redacted. The main risk it covers is an agent pasting a key into a file and committing it.
+
+`dev.yaml` sets this up in three ways, because no single one reaches every repo:
+
+- **New repos:** `/etc/gitconfig` sets `init.templateDir`, so `git clone` and `git init` copy a `pre-commit` hook into each new repo.
+- **Existing repos:** on every boot, each repo under `~/projects` that has no `pre-commit` hook gets the same hook. A repo that already has a different `pre-commit` hook (lefthook, the pre-commit framework, or a hand-written one) is left alone. The boot prints a `!` warning naming it, because commits there are **not** scanned.
+- **Husky repos:** Husky sets `core.hooksPath`, so git ignores `.git/hooks` there. Husky v9 runs `~/.config/husky/init.sh` before each of its hooks, and the boot adds the scan there. This only applies to repos that have a `.husky/pre-commit` file.
+
+Each hook is a one-line script that calls `/usr/local/bin/devvm-secret-scan`, so a change to the scan reaches every repo on the next boot.
+
+**False positives.** Add a `gitleaks:allow` comment on the line, or add the `Fingerprint` from the output to `.gitleaksignore` at the repo root and commit that file. A `.gitleaks.toml` at the repo root changes the rules for that repo.
+
+**Scan a repo's history** (the hook only checks new commits):
+
+```bash
+gitleaks git --redact -v
+```
+
+**Limits:**
+
+- `git commit --no-verify` skips every hook, this one included. The user-wide `CLAUDE.md` tells Claude not to use it unless you ask.
+- Nothing scans commits made on the Mac.
+- As a backstop, turn on GitHub's secret scanning with push protection in each repo's **Settings → Advanced Security**. It is free for public repos and blocks a push that contains a known token format.
 
 ## SonarQube
 

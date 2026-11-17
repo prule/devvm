@@ -176,6 +176,10 @@ param:
   # build matches the deploy. Bump the two together.
   # renovate: datasource=github-releases depName=gohugoio/hugo extractVersion=^v(?<version>.*)$
   HUGO_VERSION: "0.169.0"
+  # gitleaks, the secret scanner every repo's pre-commit hook runs (see
+  # devvm-secret-scan below).
+  # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.*)$
+  GITLEAKS_VERSION: "8.30.1"
   # The dev database (container), and the major of the psql client too. A
   # major bump needs a rebuild: Postgres data directories do not carry across
   # majors without a dump and restore.
@@ -626,6 +630,119 @@ provision:
         "$@"
 
   # ---------------------------------------------------------------------------
+  # SECRET SCANNING: gitleaks checks the staged changes before every commit in
+  # every repo in the VM, so a key an agent pasted into a file is stopped
+  # before it reaches git history. Three ways in, because no single one
+  # reaches every repo (devvm README, Secret scanning):
+  #   1. init.templateDir: `git clone` and `git init` copy a pre-commit hook
+  #      into each NEW repo.
+  #   2. A boot step adds the same hook to repos cloned before this existed.
+  #   3. Repos using Husky set core.hooksPath, so git ignores .git/hooks
+  #      there. Husky v9 sources ~/.config/husky/init.sh before each hook it
+  #      runs, and that is where the scan goes for them.
+  # The hooks are one-line shims calling devvm-secret-scan, so a change to
+  # the scan reaches every repo on the next boot without re-copying hooks.
+  #
+  # SYSTEM: the gitleaks binary, and the git-wide template setting. Own step
+  # and best-effort, like Hugo. --system (/etc/gitconfig), so ~/.gitconfig
+  # stays the user's own.
+  # ---------------------------------------------------------------------------
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      if [ "$(gitleaks version 2>/dev/null || echo none)" != "${PARAM_GITLEAKS_VERSION}" ]; then
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "$tmp/gitleaks.tar.gz" \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${PARAM_GITLEAKS_VERSION}/gitleaks_${PARAM_GITLEAKS_VERSION}_linux_arm64.tar.gz" \
+          && tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks \
+          && install -m 0755 "$tmp/gitleaks" /usr/local/bin/gitleaks \
+          || echo "! gitleaks skipped — commits are NOT scanned for secrets until ./update-vm.sh succeeds"
+        rm -rf "$tmp"
+      fi
+      git config --system init.templateDir /usr/local/share/devvm/git-template
+
+  # DATA: the scan every hook calls. Exits 0 with a warning if gitleaks is
+  # missing, so a failed download cannot block every commit in the VM.
+  - mode: data
+    path: /usr/local/bin/devvm-secret-scan
+    permissions: 755
+    content: |
+      #!/bin/bash
+      # Usage: devvm-secret-scan   (devvm README, Secret scanning)
+      # Run by pre-commit hooks: scans the staged changes for secrets.
+      set -uo pipefail
+      if ! command -v gitleaks > /dev/null 2>&1; then
+        echo "devvm-secret-scan: gitleaks is not installed, so this commit was NOT scanned for secrets. Re-run ./update-vm.sh on the Mac." >&2
+        exit 0
+      fi
+      # A .gitleaks.toml or .gitleaksignore at the repo root is picked up
+      # automatically; hooks run from the repo root.
+      # --log-level warn: silent on a clean commit; findings still print.
+      if gitleaks git --pre-commit --staged --redact --no-banner --verbose --log-level warn; then
+        exit 0
+      fi
+      {
+        echo
+        echo "devvm-secret-scan: COMMIT BLOCKED. gitleaks found what looks like a secret in the staged changes (above)."
+        echo "  A real secret: unstage it and keep it outside the repo (an environment variable, or a file under ~/.config/)."
+        echo "    If it was ever pushed or shared, rotate it."
+        echo "  A false positive: add a 'gitleaks:allow' comment on that line, or put the Fingerprint shown above in"
+        echo "    .gitleaksignore at the repo root, and commit that file."
+      } >&2
+      exit 1
+
+  # DATA: the hook `git clone` / `git init` copy into each new repo (way 1),
+  # and that the boot step below copies into existing ones (way 2).
+  - mode: data
+    path: /usr/local/share/devvm/git-template/hooks/pre-commit
+    permissions: 755
+    content: |
+      #!/bin/sh
+      # Added by devvm: secret scan before every commit (devvm README, Secret scanning).
+      exec /usr/local/bin/devvm-secret-scan
+
+  # DATA: the Husky part (way 3). $n is Husky v9's name for the hook it is
+  # about to run, and `exit` works because Husky sources this file.
+  - mode: data
+    path: /usr/local/share/devvm/husky-init.sh
+    content: |
+      # Added by devvm: secret scan before every commit (devvm README, Secret scanning).
+      if [ "${n:-}" = pre-commit ]; then
+        /usr/local/bin/devvm-secret-scan || exit 1
+      fi
+
+  # USER: wire ways 2 and 3 into the home directory. Never replaces a
+  # pre-commit hook a repo already has (lefthook, the pre-commit framework,
+  # one written by hand); it names those instead, as they are not scanned.
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      # Way 3: a sourcing line, not a copy, so the user's own lines in
+      # init.sh survive and a changed husky-init.sh applies at once.
+      init="$HOME/.config/husky/init.sh"
+      mkdir -p "$(dirname "$init")"
+      touch "$init"
+      grep -q 'devvm/husky-init.sh' "$init" \
+        || echo '. /usr/local/share/devvm/husky-init.sh' >> "$init"
+
+      # Way 2: every repo under ~/projects. -type d skips worktrees, whose
+      # .git is a file: they share their main repo's hooks.
+      find "$HOME/projects" -maxdepth 4 -name .git -type d -prune 2>/dev/null | while read -r gitdir; do
+        repo="$(dirname "$gitdir")"
+        # Husky (or another hooks dir) is set: .git/hooks is ignored there.
+        [ -n "$(git -C "$repo" config --local core.hooksPath 2>/dev/null)" ] && continue
+        hook="$gitdir/hooks/pre-commit"
+        if [ ! -e "$hook" ]; then
+          mkdir -p "$gitdir/hooks"
+          install -m 755 /usr/local/share/devvm/git-template/hooks/pre-commit "$hook"
+        elif ! grep -q 'devvm-secret-scan' "$hook"; then
+          echo "! ${repo#$HOME/}: has its own pre-commit hook, so commits there are NOT scanned for secrets"
+        fi
+      done
+
+  # ---------------------------------------------------------------------------
   # USER: the JS toolchain, owned by the login user.
   #
   # GONE, all of it, from post-create.sh:
@@ -903,6 +1020,7 @@ provision:
       <!-- Generated from devvm/dev.yaml on every boot. Edit it there; changes made here are lost on restart. -->
 
       - When linking to an HTML page in a GitHub repo, prepend `https://htmlpreview.github.io/?` to the GitHub URL so the page renders instead of showing its source, e.g. `https://htmlpreview.github.io/?https://github.com/owner/repo/blob/main/page.html`.
+      - Never bypass a git hook with `--no-verify` (or `-n`) unless the user asks for it. If a hook blocks a commit, such as the gitleaks secret scan, fix the cause; if it looks like a false positive, tell the user and ask before adding a `gitleaks:allow` comment or a `.gitleaksignore` entry.
 
   - mode: user
     script: |
@@ -1032,6 +1150,14 @@ probes:
       asciidoctor --version
       asciidoctor-pdf --version
     hint: "hugo, asciidoctor or asciidoctor-pdf is missing. Re-run ./update-vm.sh and check its warnings"
+  - description: "Secret scanning (gitleaks)"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      gitleaks version
+      test "$(git config --system init.templateDir)" = /usr/local/share/devvm/git-template
+      test -x /usr/local/share/devvm/git-template/hooks/pre-commit
+    hint: "Commits are not being scanned for secrets. Re-run ./update-vm.sh and check its warnings"
   - description: "Postgres (dev database)"
     script: |
       #!/bin/bash
