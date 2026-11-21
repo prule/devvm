@@ -1338,13 +1338,58 @@ provision:
 
       ## Hooks
 
-      Use the `vssw-setup-git-hooks` skill: Husky + lint-staged when there is a `package.json`, a native `core.hooksPath` hook otherwise. In the native hook, add this line first, because `core.hooksPath` makes git skip the VM's own secret-scan hook in `.git/hooks`:
+      The hook is a backstop for edits made outside the build; the build and CI are what enforce. A repo with a `package.json` uses Husky + lint-staged. A JVM-only repo uses a native hook: adding a `package.json` just for Husky would make Node a requirement for a hook git runs on its own.
+
+      **Husky + lint-staged:**
 
       ```bash
-      if command -v devvm-secret-scan > /dev/null; then devvm-secret-scan || exit 1; fi
+      pnpm add -D -E -w husky lint-staged   # drop -w outside a pnpm workspace
+      pnpm exec husky init                  # adds the "prepare": "husky" script and .husky/pre-commit
+      echo "pnpm exec lint-staged" > .husky/pre-commit
       ```
 
-      Husky repos need nothing extra: the VM runs the scan from `~/.config/husky/init.sh`.
+      `lint-staged.config.mjs` at the root. Each file matches one glob only, because lint-staged runs globs in parallel and two tools rewriting one file race:
+
+      ```js
+      const code = '*.{js,jsx,ts,tsx,mjs,cjs}';
+      export default {
+        [code]: ['eslint --fix', 'prettier --write'],
+        [`!(${code})`]: 'prettier --write --ignore-unknown',
+        // With a JVM backend in the same repo. A function, so lint-staged does not
+        // append file names, which Gradle would read as task names:
+        // '*.{java,kt,kts}': () => './gradlew spotlessApply',
+      };
+      ```
+
+      lint-staged re-stages only what it formatted and keeps unstaged changes out of the commit. `pnpm install` runs `prepare`, so every clone gets the hook. Husky sets `core.hooksPath`, and the VM still scans for secrets there, from `~/.config/husky/init.sh`.
+
+      **Native hook (JVM-only):** `.githooks/pre-commit`, executable (`chmod +x`):
+
+      ```bash
+      #!/bin/bash
+      # Formats staged code before a commit. A backstop: the build formats too.
+      set -euo pipefail
+      # core.hooksPath makes git skip .git/hooks, where the VM's secret scan lives.
+      if command -v devvm-secret-scan > /dev/null; then devvm-secret-scan || exit 1; fi
+      staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.java' '*.kt' '*.kts')
+      [ -z "$staged" ] && exit 0
+      ./gradlew spotlessApply --quiet   # Maven: ./mvnw --quiet spotless:apply
+      # Re-stage only the files that were staged; shortcut: a partly staged file gets its unstaged hunks too.
+      echo "$staged" | xargs git add --
+      ```
+
+      `core.hooksPath` is local config, which a clone does not carry, so set it from the build. Gradle:
+
+      ```kotlin
+      val installGitHooks by tasks.registering(Exec::class) {
+          commandLine("git", "config", "core.hooksPath", ".githooks")
+      }
+      tasks.named("compileJava") { dependsOn(installGitHooks) }
+      ```
+
+      Maven, or a repo with `./run`: add `git config core.hooksPath .githooks` to `./run setup`. With neither, add it as a once-per-clone step to the repo's `CLAUDE.md` and README.
+
+      **CI:** the workflow runs the same check-only command as the build (`./gradlew check`, `./mvnw verify`, `pnpm lint` and `pnpm test`), with `CI` set, which GitHub Actions does by default. Add the step if the workflow lacks it.
 
       ## Renovate
 
