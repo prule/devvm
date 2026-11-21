@@ -12,8 +12,8 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 │   (thin client only)                 ├── Node, pnpm, OpenSpec (pinned in dev.yaml)
 │                                      ├── SonarQube (Docker) + sonar-check
 │                                      ├── Postgres (Docker): dev_ro + dev_rw
-├── Browser → localhost:5173, :9000,   ├── SDKMAN: Java 25 + 21, Playwright, Electron
-│       :1313 (blog preview)           ├── Hugo dev server for pauls-blog
+├── Browser → localhost:5173,          ├── SDKMAN: Java 25 + 21, Playwright, Electron
+│   hugo.devvm, sonar.devvm (Caddy)    ├── Hugo dev server for pauls-blog
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, betterleaks
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -25,7 +25,7 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 | | |
 |---|---|
 | `dev.yaml` | The environment. Lima config + all provisioning. **The only source of truth.** |
-| `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, excludes `~/.lima` from Time Machine. |
+| `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, adds the `*.devvm` names to `/etc/hosts`, excludes `~/.lima` from Time Machine. |
 | `update-vm.sh` | Host-side. Applies the current `dev.yaml` to the existing VM with a restart, no rebuild, and shows the boot's provision warnings. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
 | `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
@@ -334,13 +334,13 @@ Things to know about Option B:
 
 `dev.yaml` keeps Hugo's dev server for `pauls-blog` running whenever the VM is up. On the Mac, open:
 
-http://localhost:1313/pauls-blog/
+http://hugo.devvm/
 
-It includes drafts, and rebuilds and reloads the browser tab every time you save a file. The `/pauls-blog/` path comes from the blog's `baseURL`, so links work the same as on GitHub Pages.
+That redirects to `/pauls-blog/`. The page includes drafts, and rebuilds and reloads the browser tab every time you save a file. The `/pauls-blog/` path comes from the blog's `baseURL`, so links work the same as on GitHub Pages.
 
 How it is set up:
 
-- **`blog-serve`** (in `/usr/local/bin`) runs `hugo server --buildDrafts --disableFastRender` in `~/projects/current/pauls-blog`, bound to the VM's localhost on port 1313. The `portForwards` entry makes it reachable from the Mac. If the theme submodule is empty, the script initialises it first. Extra arguments go to `hugo server`, for example `blog-serve -F` to also show posts with a future date.
+- **`blog-serve`** (in `/usr/local/bin`) runs `hugo server --buildDrafts --disableFastRender` in `~/projects/current/pauls-blog`, bound to the VM's localhost on port 1313. Caddy serves it at `hugo.devvm` (see **Names for services**). The server is started with `--baseURL http://hugo.devvm/pauls-blog/` and `--liveReloadPort 80`, so links and live reload go through Caddy too. `http://localhost:1313/pauls-blog/` still loads, but its links lead to `hugo.devvm` and live reload doesn't work there. If the theme submodule is empty, the script initialises it first. Extra arguments go to `hugo server`, for example `blog-serve -F` to also show posts with a future date.
 - **`devvm-blog.service`** runs `blog-serve` on boot. It uses `Restart=always`, so if the blog is not cloned yet, the service retries every 30 seconds and starts when the checkout appears.
 
 To see Hugo's output (build errors, for example):
@@ -357,6 +357,61 @@ ssh lima-dev blog-serve
 ```
 
 `sudo systemctl start devvm-blog` (or a VM restart) puts it back.
+
+## Names for services
+
+Each web service in the VM gets a name on the Mac, so you don't need its port:
+
+| Name | Goes to (VM port) |
+|---|---|
+| http://hugo.devvm | 1313, the blog preview |
+| http://sonar.devvm | 9000, SonarQube |
+| http://home-fleet.devvm | 5173 (kept: its Supabase `site_url` and e2e setup expect 5173) |
+| http://intentionhorizon.devvm | 5181 |
+| http://rss-reader.devvm | 5182 |
+| http://strength2.devvm | 5183 |
+| http://strength.devvm | 5184 (`app/`) |
+| http://leave-planner.devvm | 5185 |
+| http://video-aggregator.devvm | 5200 |
+| http://portfolio.devvm | 8789 (`wrangler pages dev --port 8789`) |
+
+Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5186.
+
+How it works:
+
+- **Caddy runs in the VM** on port 80, bound to the VM's localhost. It reads the `Host` header and passes each request to that name's port. The Caddyfile is in `dev.yaml` (the Caddy step), and every boot rewrites `/etc/caddy/Caddyfile` from it, so make changes in `dev.yaml`, not in the VM.
+- **One `portForwards` entry**, for port 80, carries all the names to the Mac's localhost. Caddy is inside the VM, so it can reach any VM port: a new name needs no new forward.
+- **The Mac's `/etc/hosts`** points each name at `127.0.0.1`. `./bootstrap.sh` (and so `./update-vm.sh`) adds every `http://<name>.devvm` it finds in `dev.yaml`, and asks for your sudo password only when a name is missing.
+- **Plain HTTP only** (`http://` in front of each name), so there are no certificates to trust.
+- The old `localhost:PORT` addresses still work.
+
+### Adding a project
+
+1. **Give the project a port of its own** that no other project uses, and make its dev server fail rather than silently move to the next free port when the port is taken. For Vite, in `vite.config.ts`:
+
+   ```ts
+   server: {
+     port: 5186,
+     strictPort: true,
+     allowedHosts: ['.devvm'], // Vite refuses unknown Host headers (403) without this
+   },
+   ```
+
+   Other servers: set the port in their config or start script. If a server builds absolute links or opens a websocket to itself (Hugo does both), tell it its public address is `http://<name>.devvm` on port 80, as `blog-serve` does.
+
+2. **Add a block to the Caddyfile in `dev.yaml`** (search for `http://sonar.devvm`). The block must start with a tab, like the others:
+
+   ```
+   http://myapp.devvm {
+   	reverse_proxy localhost:5186
+   }
+   ```
+
+3. **On the Mac, run `./update-vm.sh`.** It restarts the VM with the new Caddyfile and adds `myapp.devvm` to `/etc/hosts`.
+
+4. **Start the dev server in the VM** and open http://myapp.devvm on the Mac. Then add the name to the table above.
+
+To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `dev.yaml` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`.
 
 ## Secret scanning
 
@@ -390,7 +445,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 
 | | |
 |---|---|
-| Server | `sonarqube` container, http://localhost:9000 (forwarded to the Mac at the same address) |
+| Server | `sonarqube` container, http://sonar.devvm on the Mac (or http://localhost:9000) |
 | Scanner | `sonar-scanner`, on `PATH` |
 | `sonar-check` | Wrapper that scans the current repo and fails when the quality gate fails |
 
@@ -398,7 +453,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 
 Do this once per VM. A rebuild (`limactl delete`) wipes SonarQube's database along with everything else, so repeat it after one.
 
-1. Open http://localhost:9000 on the Mac, log in as `admin` / `admin`, and set a new password when asked.
+1. Open http://sonar.devvm on the Mac, log in as `admin` / `admin`, and set a new password when asked.
 2. **My Account → Security → Generate Tokens.** Type **User token**, any name, choose an expiry. A user token carries the admin's *Create Projects* permission, which is what lets the first scan of a repo create its project. A project analysis token can't do that.
 3. Store it in the VM, readable only by you:
 
@@ -567,7 +622,7 @@ A regex custom manager in `renovate.json` matches every such pair. To track a ne
 - **Java is the exception to "one version".** `JAVA_VERSIONS: "25.0.4-tem 21.0.12-tem"` — 25 is the default; 21 is there because some projects pin `jvmToolchain(21)`, and a missing toolchain JDK makes Gradle auto-provision mid-build or fail.
 - **`java` must agree across shell modes.** `/etc/environment` puts `JAVA_HOME` and a `java` entry at the **tail** of `PATH`. The tail position is load-bearing: `sdkman-init` prepends its own entry in interactive shells and `sdk use`/`sdk env` rewrites *that* one, so a `java` ahead of it wins and silently breaks per-project switching — `sdk env` reports 21 while `java -version` still says 25.
 - **`param:`, not `env:`.** Provision scripts only see `param:` values, as `$PARAM_<Key>`. `env:` sets the login environment and is invisible to provisioning — an easy and silent-looking mistake that actually aborts the provision under `set -u`.
-- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324, 9000 for SonarQube, 5432 for the dev database); the robust fix is still `server: { host: true }` in `vite.config.ts`.
+- **Ports.** Lima auto-forwards guest ports bound to `0.0.0.0`. Ports bound to `127.0.0.1` *inside* the guest need a `portForwards` entry. `dev.yaml` declares the known ones (5173/4173/5174, 54321–54324, 9000 for SonarQube, 5432 for the dev database, 80 for Caddy); the robust fix is still `server: { host: true }` in `vite.config.ts`.
 - **Docker group.** The first login after provisioning may not have the `docker` group yet. `limactl stop dev && limactl start dev` fixes it.
 - **No agent forwarding, on purpose.** `bootstrap.sh` strips `ForwardAgent yes` if a regenerated SSH block ever introduces one. The VM has its own GitHub key.
 - **`@mention` files** doesn't work in desktop-app SSH sessions. File attachment does. This is the one real day-to-day loss.

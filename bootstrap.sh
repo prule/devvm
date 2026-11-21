@@ -86,7 +86,22 @@ if grep -qi '^[[:space:]]*ForwardAgent[[:space:]]\+yes' "$tmp"; then
 fi
 install -m 600 "$tmp" ~/.ssh/config && rm -f "$tmp"
 
-# --- 4. Time Machine ----------------------------------------------------------
+# --- 4. Service names ---------------------------------------------------------
+# Caddy in the VM routes http://<name>.devvm to a VM port; the Mac must resolve
+# each name to 127.0.0.1. Names come from dev.yaml's Caddyfile. Only asks for
+# sudo when a name is missing.
+missing=""
+for name in $(grep -oE 'http://[a-z0-9-]+\.devvm' "$HERE/dev.yaml" | sed 's|http://||' | sort -u); do
+  awk -v n="$name" '$1=="127.0.0.1" { for (i=2; i<=NF; i++) if ($i==n) f=1 } END { exit !f }' /etc/hosts \
+    || missing="$missing $name"
+done
+if [ -n "$missing" ]; then
+  say "Adding to /etc/hosts (sudo):$missing"
+  echo "127.0.0.1$missing" | sudo tee -a /etc/hosts > /dev/null \
+    || say "  (skipped — add this line to /etc/hosts by hand: 127.0.0.1$missing)"
+fi
+
+# --- 5. Time Machine ----------------------------------------------------------
 # A 120GB disk image that changes constantly will otherwise be re-backed-up
 # forever. Nothing in the VM is backed up as a result — which is fine, because
 # everything that matters is in git and pushed. That is a real obligation, not

@@ -114,7 +114,14 @@ containerd:
 #   9000 sonarqube — published on 127.0.0.1 only, same reasoning
 #   5432 postgres (the dev database, not Supabase's) — same again
 #   1313 hugo server for pauls-blog (blog-serve) — same again
+#   80 caddy, routing <name>.devvm to a VM port (see the Caddy step). Lima
+#      forwards a privileged port without root; it still only accepts
+#      connections from the Mac's loopback.
 portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [80, 80]
+    hostIP: "127.0.0.1"
+    hostPortRange: [80, 80]
   - guestIP: "127.0.0.1"
     guestPortRange: [1313, 1313]
     hostIP: "127.0.0.1"
@@ -629,11 +636,78 @@ provision:
       if [ -z "$(ls -A themes/hugo-simple-beauty 2>/dev/null)" ]; then
         git submodule update --init --recursive
       fi
+      # baseURL/appendPort/liveReloadPort: links and the live-reload websocket
+      # go through Caddy at http://hugo.devvm, not straight to :1313.
       exec hugo server \
         --buildDrafts \
         --bind 127.0.0.1 --port 1313 \
+        --baseURL http://hugo.devvm/pauls-blog/ --appendPort=false \
+        --liveReloadPort 80 \
         --disableFastRender \
         "$@"
+
+  # ---------------------------------------------------------------------------
+  # SYSTEM: Caddy, so the Mac reaches each service by name on port 80
+  # (http://hugo.devvm) instead of by port (devvm README, Names for services).
+  # Caddy runs in the VM, so a route can point at ANY VM port: adding a project
+  # is one line in the Caddyfile below, with no new portForwards entry. Each
+  # name also needs a line in the Mac's /etc/hosts; bootstrap.sh adds the ones
+  # it finds here. Best-effort, like the Hugo step.
+  # ---------------------------------------------------------------------------
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      command -v caddy > /dev/null \
+        || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends caddy \
+        || { echo "! caddy skipped — re-run ./update-vm.sh later"; exit 0; }
+      cat > /etc/caddy/Caddyfile <<'CADDY'
+      # One block per name: http://<name>.devvm { reverse_proxy localhost:<port> }
+      # localhost, not 127.0.0.1: Vite without host: true may listen on ::1 only,
+      # and Caddy tries both addresses.
+      # http:// means plain HTTP and no certificates. Edit dev.yaml, not this file:
+      # every boot rewrites it.
+      {
+      	default_bind 127.0.0.1
+      }
+      http://hugo.devvm {
+      	redir / /pauls-blog/
+      	reverse_proxy localhost:1313
+      }
+      http://sonar.devvm {
+      	reverse_proxy localhost:9000
+      }
+      # Projects: each dev server's port is pinned in its own repo (Vite:
+      # server.port + strictPort + allowedHosts ['.devvm']).
+      http://home-fleet.devvm {
+      	reverse_proxy localhost:5173
+      }
+      http://intentionhorizon.devvm {
+      	reverse_proxy localhost:5181
+      }
+      http://rss-reader.devvm {
+      	reverse_proxy localhost:5182
+      }
+      http://strength2.devvm {
+      	reverse_proxy localhost:5183
+      }
+      http://strength.devvm {
+      	reverse_proxy localhost:5184
+      }
+      http://leave-planner.devvm {
+      	reverse_proxy localhost:5185
+      }
+      http://video-aggregator.devvm {
+      	reverse_proxy localhost:5200
+      }
+      http://portfolio.devvm {
+      	reverse_proxy localhost:8789
+      }
+      CADDY
+      caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile > /dev/null 2>&1 \
+        || { echo "! Caddyfile invalid — run: caddy validate --config /etc/caddy/Caddyfile"; exit 0; }
+      systemctl enable caddy
+      systemctl restart caddy || echo "! caddy did not start — see: systemctl status caddy"
 
   # ---------------------------------------------------------------------------
   # SECRET SCANNING: betterleaks checks the staged changes before every commit in
