@@ -13,7 +13,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 │                                      ├── SonarQube (Docker) + sonar-check
 │                                      ├── Postgres (Docker): dev_ro + dev_rw
 ├── Browser → localhost:5173,          ├── SDKMAN: Java 25 + 21, Playwright, Electron
-│   hugo.devvm, sonar.devvm (Caddy)    ├── Hugo dev server for pauls-blog
+│   hugo.devvm:8000, sonar… (Caddy)    ├── Hugo dev server for pauls-blog
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, betterleaks
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
@@ -334,13 +334,13 @@ Things to know about Option B:
 
 `dev.yaml` keeps Hugo's dev server for `pauls-blog` running whenever the VM is up. On the Mac, open:
 
-http://hugo.devvm/
+http://hugo.devvm:8000/
 
 That redirects to `/pauls-blog/`. The page includes drafts, and rebuilds and reloads the browser tab every time you save a file. The `/pauls-blog/` path comes from the blog's `baseURL`, so links work the same as on GitHub Pages.
 
 How it is set up:
 
-- **`blog-serve`** (in `/usr/local/bin`) runs `hugo server --buildDrafts --disableFastRender` in `~/projects/current/pauls-blog`, bound to the VM's localhost on port 1313. Caddy serves it at `hugo.devvm` (see **Names for services**). The server is started with `--baseURL http://hugo.devvm/pauls-blog/` and `--liveReloadPort 80`, so links and live reload go through Caddy too. `http://localhost:1313/pauls-blog/` still loads, but its links lead to `hugo.devvm` and live reload doesn't work there. If the theme submodule is empty, the script initialises it first. Extra arguments go to `hugo server`, for example `blog-serve -F` to also show posts with a future date.
+- **`blog-serve`** (in `/usr/local/bin`) runs `hugo server --buildDrafts --disableFastRender` in `~/projects/current/pauls-blog`, bound to the VM's localhost on port 1313. Caddy serves it at `hugo.devvm` (see **Names for services**). The server is started with `--baseURL http://hugo.devvm:8000/pauls-blog/` and `--liveReloadPort 8000`, so links and live reload go through Caddy too. `http://localhost:1313/pauls-blog/` still loads, but its links lead to `hugo.devvm` and live reload doesn't work there. If the theme submodule is empty, the script initialises it first. Extra arguments go to `hugo server`, for example `blog-serve -F` to also show posts with a future date.
 - **The Hugo version comes from the blog**, not from `dev.yaml`: each boot installs the `HUGO_VERSION` in pauls-blog's `.github/workflows/hugo.yml`, so the preview builds with what the site deploys with. Renovate bumps it in pauls-blog. After merging a bump, run `git pull` in the VM's pauls-blog checkout, then `./update-vm.sh` on the Mac. Until then `blog-serve` logs a `WARNING` saying the versions differ. `dev.yaml`'s `HUGO_VERSION` is only used before the blog is cloned.
 - **`devvm-blog.service`** runs `blog-serve` on boot. It uses `Restart=always`, so if the blog is not cloned yet, the service retries every 30 seconds and starts when the checkout appears.
 
@@ -361,27 +361,27 @@ ssh lima-dev blog-serve
 
 ## Names for services
 
-Each web service in the VM gets a name on the Mac, so you don't need its port:
+Each web service in the VM gets a name on the Mac, all on one port, 8000, so you don't need each service's own port:
 
 | Name | Goes to (VM port) |
 |---|---|
-| http://hugo.devvm | 1313, the blog preview |
-| http://sonar.devvm | 9000, SonarQube |
-| http://home-fleet.devvm | 5173 (kept: its Supabase `site_url` and e2e setup expect 5173) |
-| http://intentionhorizon.devvm | 5181 |
-| http://rss-reader.devvm | 5182 |
-| http://strength2.devvm | 5183 |
-| http://strength.devvm | 5184 (`app/`) |
-| http://leave-planner.devvm | 5185 |
-| http://video-aggregator.devvm | 5200 |
-| http://portfolio.devvm | 8789 (`wrangler pages dev --port 8789`) |
+| http://hugo.devvm:8000 | 1313, the blog preview |
+| http://sonar.devvm:8000 | 9000, SonarQube |
+| http://home-fleet.devvm:8000 | 5173 (kept: its Supabase `site_url` and e2e setup expect 5173) |
+| http://intentionhorizon.devvm:8000 | 5181 |
+| http://rss-reader.devvm:8000 | 5182 |
+| http://strength2.devvm:8000 | 5183 |
+| http://strength.devvm:8000 | 5184 (`app/`) |
+| http://leave-planner.devvm:8000 | 5185 |
+| http://video-aggregator.devvm:8000 | 5200 |
+| http://portfolio.devvm:8000 | 8789 (`wrangler pages dev --port 8789`) |
 
 Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5186.
 
 How it works:
 
 - **Caddy runs in the VM** on port 80, bound to the VM's localhost. It reads the `Host` header and passes each request to that name's port. The Caddyfile is in `dev.yaml` (the Caddy step), and every boot rewrites `/etc/caddy/Caddyfile` from it, so make changes in `dev.yaml`, not in the VM.
-- **One `portForwards` entry**, for port 80, carries all the names to the Mac's localhost. Caddy is inside the VM, so it can reach any VM port: a new name needs no new forward.
+- **One `portForwards` entry** carries the VM's port 80 to the Mac's port 8000 on localhost, for all the names. It is 8000, not 80, because Lima did not forward the Mac's privileged port 80; Caddy matches the name and ignores the port. Caddy is inside the VM, so it can reach any VM port: a new name needs no new forward.
 - **The Mac's `/etc/hosts`** points each name at `127.0.0.1`. `./bootstrap.sh` (and so `./update-vm.sh`) adds every `http://<name>.devvm` it finds in `dev.yaml`, and asks for your sudo password only when a name is missing.
 - **Plain HTTP only** (`http://` in front of each name), so there are no certificates to trust.
 - The old `localhost:PORT` addresses still work.
@@ -398,7 +398,7 @@ How it works:
    },
    ```
 
-   Other servers: set the port in their config or start script. If a server builds absolute links or opens a websocket to itself (Hugo does both), tell it its public address is `http://<name>.devvm` on port 80, as `blog-serve` does.
+   Other servers: set the port in their config or start script. If a server builds absolute links or opens a websocket to itself (Hugo does both), tell it its public address is `http://<name>.devvm:8000`, as `blog-serve` does.
 
 2. **Add a block to the Caddyfile in `dev.yaml`** (search for `http://sonar.devvm`). The block must start with a tab, like the others:
 
@@ -410,7 +410,7 @@ How it works:
 
 3. **On the Mac, run `./update-vm.sh`.** It restarts the VM with the new Caddyfile and adds `myapp.devvm` to `/etc/hosts`.
 
-4. **Start the dev server in the VM** and open http://myapp.devvm on the Mac. Then add the name to the table above.
+4. **Start the dev server in the VM** and open http://myapp.devvm:8000 on the Mac. Then add the name to the table above.
 
 To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `dev.yaml` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`.
 
@@ -448,7 +448,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 
 | | |
 |---|---|
-| Server | `sonarqube` container, http://sonar.devvm on the Mac (or http://localhost:9000) |
+| Server | `sonarqube` container, http://sonar.devvm:8000 on the Mac (or http://localhost:9000) |
 | Scanner | `sonar-scanner`, on `PATH` |
 | `sonar-check` | Wrapper that scans the current repo and fails when the quality gate fails |
 
@@ -456,7 +456,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 
 Do this once per VM. A rebuild (`limactl delete`) wipes SonarQube's database along with everything else, so repeat it after one.
 
-1. Open http://sonar.devvm on the Mac, log in as `admin` / `admin`, and set a new password when asked.
+1. Open http://sonar.devvm:8000 on the Mac, log in as `admin` / `admin`, and set a new password when asked.
 2. **My Account → Security → Generate Tokens.** Type **User token**, any name, choose an expiry. A user token carries the admin's *Create Projects* permission, which is what lets the first scan of a repo create its project. A project analysis token can't do that.
 3. Store it in the VM, readable only by you:
 

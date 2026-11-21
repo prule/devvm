@@ -114,14 +114,15 @@ containerd:
 #   9000 sonarqube — published on 127.0.0.1 only, same reasoning
 #   5432 postgres (the dev database, not Supabase's) — same again
 #   1313 hugo server for pauls-blog (blog-serve) — same again
-#   80 caddy, routing <name>.devvm to a VM port (see the Caddy step). Lima
-#      forwards a privileged port without root; it still only accepts
-#      connections from the Mac's loopback.
+#   80 caddy, routing <name>.devvm to a VM port (see the Caddy step), on
+#      the Mac's port 8000: Lima did not forward the Mac's privileged port 80,
+#      so names carry :8000 (http://hugo.devvm:8000).
+#      Caddy matches the name and ignores the port in the Host header.
 portForwards:
   - guestIP: "127.0.0.1"
     guestPortRange: [80, 80]
     hostIP: "127.0.0.1"
-    hostPortRange: [80, 80]
+    hostPortRange: [8000, 8000]
   - guestIP: "127.0.0.1"
     guestPortRange: [1313, 1313]
     hostIP: "127.0.0.1"
@@ -660,18 +661,19 @@ provision:
         git submodule update --init --recursive
       fi
       # baseURL/appendPort/liveReloadPort: links and the live-reload websocket
-      # go through Caddy at http://hugo.devvm, not straight to :1313.
+      # go through Caddy at http://hugo.devvm:8000 (the Mac's end of the
+      # forward to Caddy's port 80), not straight to :1313.
       exec hugo server \
         --buildDrafts \
         --bind 127.0.0.1 --port 1313 \
-        --baseURL http://hugo.devvm/pauls-blog/ --appendPort=false \
-        --liveReloadPort 80 \
+        --baseURL http://hugo.devvm:8000/pauls-blog/ --appendPort=false \
+        --liveReloadPort 8000 \
         --disableFastRender \
         "$@"
 
   # ---------------------------------------------------------------------------
-  # SYSTEM: Caddy, so the Mac reaches each service by name on port 80
-  # (http://hugo.devvm) instead of by port (devvm README, Names for services).
+  # SYSTEM: Caddy, so the Mac reaches each service by name on one port
+  # (http://hugo.devvm:8000; Caddy listens on 80 in the VM) instead of by port (devvm README, Names for services).
   # Caddy runs in the VM, so a route can point at ANY VM port: adding a project
   # is one line in the Caddyfile below, with no new portForwards entry. Each
   # name also needs a line in the Mac's /etc/hosts; bootstrap.sh adds the ones
