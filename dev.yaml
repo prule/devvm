@@ -31,7 +31,7 @@ rosetta:
 # needs, so this is up from the 4/12 of the mounted-folder design.
 # This is the one knob to turn if things feel tight.
 cpus: 6           # of 8
-memory: 14GiB     # of 24 — leaves 10GB for macOS and the thin client
+memory: 10GiB     # of 24 — leaves 14GB for macOS, Xcode and the thin clients
 # Measured, not guessed. Tracked source plus git history is small — well under
 # 1GB across every project. The budget:
 #

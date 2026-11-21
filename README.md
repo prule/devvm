@@ -118,7 +118,7 @@ WebStorm has no Java support: no completion, refactoring, Gradle import or Java 
 
 - **Remote development needs a paid subscription.** IntelliJ IDEA has been one download with a free tier since 2025.3. The free tier covers Java, Kotlin, Gradle and Maven, plus basic JavaScript/TypeScript since 2026.1. Gateway's remote mode is not in it, though, so the free tier can only open code on the Mac, and here the code lives only in the VM. Without a subscription, use VS Code for Java (see **VS Code → Java** below).
 - **Ultimate covers what WebStorm does,** so one IntelliJ backend can serve Java and TypeScript repos, instead of two.
-- **Each backend is its own JVM in the VM** (roughly 2–4 GB). WebStorm and IntelliJ backends running at once take a real share of the VM's 14 GiB, next to SonarQube and Postgres.
+- **Each backend is its own JVM in the VM** (roughly 2–4 GB). WebStorm and IntelliJ backends running at once take a real share of the VM's 10 GiB, next to SonarQube and Postgres.
 - **JDK:** set the project SDK to SDKMAN's install, `~/.sdkman/candidates/java/25.0.4-tem` or `21.0.12-tem` (see **JVM versions**).
 - **Turn off SSH agent forwarding** in the IntelliJ window too, as for WebStorm above. It is a separate setting per IDE.
 
