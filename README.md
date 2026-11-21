@@ -139,6 +139,8 @@ Install the **Remote - SSH** extension (Microsoft), then ⇧⌘P → **Remote-SS
 
 If it fails with `Connection refused`, see the SSH port note under **Two things that will catch you out**.
 
+**Port forwarding is off in VS Code.** Lima already forwards the VM's ports to the Mac, and VS Code's own automatic forwards took Mac ports Lima needed: VS Code held port 8000, so every `http://<name>.devvm:8000` hung. `dev.yaml` sets `remote.autoForwardPorts` to `false` in the VM's remote settings on every boot. If VS Code still forwards ports (its **Ports** panel lists them), set the same in the Mac's own VS Code settings.
+
 ### Java
 
 VS Code is the free way to work on Java in the VM (IntelliJ IDEA needs a paid subscription for this; see **WebStorm → Java**). It uses Microsoft's **Extension Pack for Java**, which runs on the VM side and brings Red Hat's Java language server, the debugger, the test runner, and Maven and Gradle support. Connect to `lima-dev`, then **File → Open Folder…** → the repo.
@@ -412,7 +414,7 @@ How it works:
 
 4. **Start the dev server in the VM** and open http://myapp.devvm:8000 on the Mac. Then add the name to the table above.
 
-To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `dev.yaml` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`.
+To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `dev.yaml` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`. If every name hangs, something else on the Mac holds port 8000, so Lima could not take it: `sudo lsof -nP -iTCP:8000 -sTCP:LISTEN` on the Mac shows what. VS Code did once (see **VS Code**); free the port, then run `./update-vm.sh`, because Lima only sets up the forward at boot.
 
 ## Secret scanning
 

@@ -1117,9 +1117,12 @@ provision:
   # ---------------------------------------------------------------------------
   # USER: VS Code over Remote-SSH, for Java (devvm README, VS Code → Java).
   #
-  # First, java.configuration.runtimes in the VM's remote settings, built from
-  # JAVA_VERSIONS so it can't drift from the installed JDKs. Only that key is
-  # rewritten on each boot; other settings survive. jq can't parse JSON with
+  # First, two keys in the VM's remote settings. java.configuration.runtimes,
+  # built from JAVA_VERSIONS so it can't drift from the installed JDKs. And
+  # remote.autoForwardPorts false: Lima already forwards the VM's ports, and
+  # VS Code's own forwards took Mac ports Lima needed (it held 8000, so
+  # http://<name>.devvm:8000 hung). Only these keys are rewritten on each
+  # boot; other settings survive. jq can't parse JSON with
   # comments, so a commented settings file is left alone with a warning.
   #
   # Then the extensions. They install through the VS Code server, which the
@@ -1143,7 +1146,7 @@ provision:
           '. + [{name: $n, path: $p} + (if $d then {default: true} else {} end)]' <<< "$runtimes")"
       done
       tmp="$(mktemp)"
-      if jq --argjson r "$runtimes" '."java.configuration.runtimes" = $r' "$settings" > "$tmp" 2>/dev/null; then
+      if jq --argjson r "$runtimes" '."java.configuration.runtimes" = $r | ."remote.autoForwardPorts" = false' "$settings" > "$tmp" 2>/dev/null; then
         mv "$tmp" "$settings"
       else
         rm -f "$tmp"
