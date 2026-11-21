@@ -15,6 +15,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 ├── Browser → localhost:5173,          ├── SDKMAN: Java 25 + 21, Playwright, Electron
 │   hugo.devvm:8000, sonar… (Caddy)    ├── Hugo dev server for pauls-blog
 ├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, betterleaks
+│                                      ├── graphify, Claude Code skills (caveman, …)
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
 Two thin clients on the Mac, one box doing the work. No shared folders.
