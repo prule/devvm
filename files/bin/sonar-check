@@ -1,0 +1,37 @@
+#!/bin/bash
+# Usage: sonar-check [-Dsonar.<prop>=<value> ...]   (devvm README, SonarQube)
+set -euo pipefail
+host=http://localhost:9000
+token_file="$HOME/.config/sonar/token"
+if [ ! -s "$token_file" ]; then
+  echo "sonar-check: no token in $token_file — see the SonarQube section of the devvm README." >&2
+  exit 2
+fi
+if ! curl -fsS "$host/api/system/status" | grep -q '"status":"UP"'; then
+  echo "sonar-check: SonarQube is not up at $host. Try: docker start sonarqube" >&2
+  exit 2
+fi
+token="$(cat "$token_file")"
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# A key in sonar-project.properties wins; otherwise the repo's directory name.
+key="$(sed -n 's/^sonar\.projectKey=//p' "$root/sonar-project.properties" 2>/dev/null || true)"
+key="${key:-$(basename "$root")}"
+
+status=0
+(cd "$root" && SONAR_TOKEN="$token" SONAR_HOST_URL="$host" \
+  sonar-scanner -Dsonar.projectKey="$key" -Dsonar.qualitygate.wait=true "$@") || status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo
+  echo "=== sonar-check: FAILED for $key ($host/dashboard?id=$key) ==="
+  echo "--- failed quality gate conditions ---"
+  curl -fsSu "$token:" "$host/api/qualitygates/project_status?projectKey=$key" \
+    | jq -r '.projectStatus.conditions[]? | select(.status == "ERROR")
+             | "\(.metricKey): \(.actualValue) (fails when \(.comparator) \(.errorThreshold))"' || true
+  echo "--- open issues in new code (file:line rule message) ---"
+  curl -fsSu "$token:" "$host/api/issues/search?components=$key&resolved=false&inNewCodePeriod=true&ps=100" \
+    | jq -r '.issues[] | "\(.component | sub("^[^:]*:"; "")):\(.line // "-")  \(.rule)  \(.message)"' || true
+else
+  echo "=== sonar-check: quality gate passed for $key ==="
+fi
+exit "$status"

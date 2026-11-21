@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# Usage: standards-check [repo]   (devvm README, Project standards)
+# Lists where a repo falls short of ~/projects/CLAUDE.md. Read-only.
+# Exit 0: no gaps. Exit 1: gaps (one per line). Exit 2: not a git repo.
+import json, os, re, subprocess, sys
+from pathlib import Path
+
+
+def run(cmd, cwd):
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+
+
+def read(p):
+    try:
+        return p.read_text(errors="ignore")
+    except OSError:
+        return ""
+
+
+def check(repo):
+    gaps = []
+    # Tracked files only, so generated and ignored files (.husky/_, build/) are skipped.
+    files = [repo / f for f in run(["git", "ls-files"], repo).stdout.splitlines()]
+    files = [p for p in files if p.is_file() and "node_modules" not in p.parts]
+    loc = lambda p: str(p.parent.relative_to(repo)) if p.parent != repo else "."
+    pkgs = [p for p in files if p.name == "package.json"]
+    gradles = [p for p in files if p.name in ("build.gradle", "build.gradle.kts") and "buildSrc" not in p.parts]
+    poms = [p for p in files if p.name == "pom.xml"]
+
+    # --- All projects -------------------------------------------------------
+    if (pkgs or gradles or poms) and not any(
+        (repo / n).exists() for n in ("renovate.json", "renovate.json5", ".github/renovate.json", ".renovaterc", ".renovaterc.json")
+    ):
+        gaps.append("renovate: no renovate.json")
+    hooks_path = run(["git", "config", "core.hooksPath"], repo).stdout.strip()
+
+    shells = [p for p in files if p.suffix in (".sh", ".bash") or (p.parent == repo and p.name == "run")]
+    for p in shells:
+        r = run(["shellcheck", "-S", "warning", "-f", "gcc", str(p)], repo)
+        if r.returncode:
+            n = len(r.stdout.splitlines())
+            gaps.append(f"shellcheck: {p.relative_to(repo)} ({n} finding{'s' * (n != 1)})")
+    for p in files:
+        if p.name == "Dockerfile" or p.name.startswith("Dockerfile.") or p.name.endswith(".Dockerfile"):
+            if run(["hadolint", "--failure-threshold", "warning", str(p)], repo).returncode:
+                gaps.append(f"hadolint: {p.relative_to(repo)}")
+
+    url = run(["git", "remote", "get-url", "origin"], repo).stdout.strip()
+    m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+    if m:
+        r = run(["gh", "api", f"repos/{m.group(1)}", "--jq",
+                 "[.visibility, (.security_and_analysis.secret_scanning_push_protection.status // \"n/a\")] | @tsv"], repo)
+        if r.returncode == 0:
+            vis, pp = (r.stdout.strip().split("\t") + ["", ""])[:2]
+            if pp == "disabled":
+                gaps.append(f"push-protection: off on {m.group(1)}")
+            elif pp == "n/a":
+                print(f"note: push protection not available on {vis} repo {m.group(1)} (needs a paid GitHub plan)", file=sys.stderr)
+        else:
+            print("note: push protection not checked (gh failed)", file=sys.stderr)
+
+    # --- JavaScript / TypeScript --------------------------------------------
+    for p in pkgs:
+        try:
+            j = json.loads(read(p))
+        except ValueError:
+            gaps.append(f"js {loc(p)}: package.json does not parse"); continue
+        deps = {**j.get("dependencies", {}), **j.get("devDependencies", {})}
+        floating = sorted(k for k, v in deps.items()
+                          if re.match(r"^[\^~<>*]|^latest$|^x$", v) or re.search(r"\.x\b", v))
+        if floating:
+            gaps.append(f"js {loc(p)}: floating ranges: {', '.join(floating[:5])}{' …' if len(floating) > 5 else ''} ({len(floating)})")
+        if (p.parent / "package-lock.json").exists() or (p.parent / "yarn.lock").exists():
+            gaps.append(f"js {loc(p)}: npm/yarn lockfile (use pnpm)")
+        scripts = j.get("scripts", {})
+        is_root = p.parent == repo
+        if not is_root and not deps and not scripts:
+            continue
+        if "test" not in scripts:
+            gaps.append(f"js {loc(p)}: no test script")
+        elif not re.search(r"\b(fix|format|lint|eslint|oxlint|prettier)\b", scripts["test"]):
+            gaps.append(f"js {loc(p)}: test script does not format/lint first")
+        if "lint" not in scripts:
+            gaps.append(f"js {loc(p)}: no lint script")
+        root_deps = deps
+        if not is_root:
+            try:
+                rj = json.loads(read(repo / "package.json"))
+                root_deps = {**deps, **rj.get("dependencies", {}), **rj.get("devDependencies", {})}
+            except ValueError:
+                pass
+        if "eslint" not in root_deps and "oxlint" not in root_deps:
+            gaps.append(f"js {loc(p)}: no eslint or oxlint")
+        if "prettier" not in root_deps:
+            gaps.append(f"js {loc(p)}: no prettier")
+        tsconfigs = list(p.parent.glob("tsconfig*.json"))
+        if tsconfigs and not any(re.search(r'"strict"\s*:\s*true', read(t)) for t in tsconfigs):
+            gaps.append(f"js {loc(p)}: tsconfig not strict")
+    if pkgs:
+        if not (repo / ".husky/pre-commit").exists():
+            gaps.append("hook: no .husky/pre-commit")
+        elif "lint-staged" not in read(repo / ".husky/pre-commit"):
+            gaps.append("hook: .husky/pre-commit does not run lint-staged")
+
+    # --- Java ----------------------------------------------------------------
+    for p in gradles + poms:
+        txt = read(p)
+        if p.name != "pom.xml":
+            for cat in (p.parent / "gradle/libs.versions.toml", repo / "gradle/libs.versions.toml"):
+                if cat.exists():
+                    txt += read(cat); break
+            for conv in (repo / "buildSrc").rglob("*.gradle*") if (repo / "buildSrc").exists() else []:
+                txt += read(conv)
+        low = txt.lower()
+        if not re.search(r"\b(java|kotlin|spring)", low) and "sourceCompatibility" not in txt:
+            continue  # not a JVM module (e.g. a settings-only build)
+        missing = [t for t in ("spotless", "pmd") if t not in low]
+        if not re.search(r"spotbugs|errorprone|error-prone", low):
+            missing.append("spotbugs/errorprone")
+        if missing:
+            gaps.append(f"java {loc(p)}: missing {', '.join(missing)}")
+        if p.name == "pom.xml":
+            if not any((d / "mvnw").exists() for d in (p.parent, repo)):
+                gaps.append(f"java {loc(p)}: no ./mvnw")
+            if "spotless" in low and "env.CI" not in txt:
+                gaps.append(f"java {loc(p)}: spotless:apply not bound outside CI (profile on !env.CI)")
+        else:
+            if not any((d / "gradlew").exists() for d in (p.parent, repo)):
+                gaps.append(f"java {loc(p)}: no ./gradlew")
+            if "spotless" in low and not ("spotlessApply" in txt and re.search(r"getenv\(\s*['\"]CI['\"]", txt)):
+                gaps.append(f"java {loc(p)}: compileJava not wired to spotlessApply outside CI")
+    if (gradles or poms) and not pkgs:
+        hook = repo / hooks_path / "pre-commit" if hooks_path else None
+        if not hook or not hook.exists():
+            gaps.append("hook: no core.hooksPath pre-commit (JVM-only repo)")
+        elif "devvm-secret-scan" not in read(hook):
+            gaps.append(f"hook: {hooks_path}/pre-commit does not call devvm-secret-scan (core.hooksPath bypasses the VM's scan)")
+    return gaps
+
+
+def main():
+    repo = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+    top = run(["git", "rev-parse", "--show-toplevel"], repo)
+    if top.returncode:
+        print(f"standards-check: {repo} is not a git repo", file=sys.stderr)
+        return 2
+    gaps = check(Path(top.stdout.strip()))
+    for g in gaps:
+        print(g)
+    if not gaps:
+        print("standards-check: no gaps", file=sys.stderr)
+    return 1 if gaps else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

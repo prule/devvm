@@ -1,0 +1,30 @@
+#!/bin/bash
+# Usage: blog-serve [extra hugo server flags]   (devvm README, Blog preview)
+set -euo pipefail
+blog="${BLOG_DIR:-$HOME/projects/current/pauls-blog}"
+if [ ! -f "$blog/hugo.toml" ]; then
+  echo "blog-serve: no Hugo site at $blog (set BLOG_DIR, or clone pauls-blog)" >&2
+  exit 1
+fi
+cd "$blog"
+# Warn (into the journal) when the VM's Hugo isn't the one the blog
+# deploys with; the Hugo step installs that one on the next boot.
+want="$(sed -nE 's/^[[:space:]]*HUGO_VERSION:[[:space:]]*"?([0-9][0-9.]*)"?.*/\1/p' .github/workflows/hugo.yml 2>/dev/null | head -1)"
+have="$(hugo version | sed -nE 's/^hugo v([0-9][0-9.]*)-.*/\1/p')"
+if [ -n "$want" ] && [ "$want" != "$have" ]; then
+  echo "blog-serve: WARNING: Hugo $have is installed, but the blog deploys with $want. Run ./update-vm.sh on the Mac to install it." >&2
+fi
+# The theme is a submodule; without it Hugo starts and serves blank pages.
+if [ -z "$(ls -A themes/hugo-simple-beauty 2>/dev/null)" ]; then
+  git submodule update --init --recursive
+fi
+# baseURL/appendPort/liveReloadPort: links and the live-reload websocket
+# go through Caddy at http://hugo.devvm:8000 (the Mac's end of the
+# forward to Caddy's port 80), not straight to :1313.
+exec hugo server \
+  --buildDrafts \
+  --bind 127.0.0.1 --port 1313 \
+  --baseURL http://hugo.devvm:8000/pauls-blog/ --appendPort=false \
+  --liveReloadPort 8000 \
+  --disableFastRender \
+  "$@"

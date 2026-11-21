@@ -25,7 +25,10 @@ ssh -O exit "lima-${VM_NAME}" 2>/dev/null || true
 limactl stop "$VM_NAME"
 
 say "Replacing ~/.lima/$VM_NAME/lima.yaml with dev.yaml"
-cp "$HERE/dev.yaml" "$HOME/.lima/$VM_NAME/lima.yaml"
+# --embed copies in each provision step's file: (provision/, files/), as
+# `limactl start` did when the VM was created. A plain cp would leave
+# relative paths that do not resolve from ~/.lima.
+limactl template copy --embed "$HERE/dev.yaml" "$HOME/.lima/$VM_NAME/lima.yaml"
 
 # Starts the VM (provision runs on boot) and rewrites the ~/.ssh/config block,
 # in case dev.yaml changed the SSH port (ssh.localPort) or the key.

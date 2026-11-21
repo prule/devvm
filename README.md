@@ -25,7 +25,9 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 
 | | |
 |---|---|
-| `dev.yaml` | The environment. Lima config + all provisioning. **The only source of truth.** |
+| `dev.yaml` | The environment: Lima config, version pins, probes, and the list of provision steps in the order they run. **With `provision/` and `files/`, the only source of truth.** |
+| `provision/` | One script per provision step, `<name>.sh`, its notes at the top. `dev.yaml` points at each with `file:`. |
+| `files/` | What the data steps write into the VM: `sonar-check` and the other commands in `files/bin/`, the two `CLAUDE.md` files, the git hooks, the `apply-project-standards` skill. |
 | `bootstrap.sh` | Host-side. Creates the VM, writes the `lima-dev` SSH config block, adds the `*.devvm` names to `/etc/hosts`, excludes `~/.lima` from Time Machine. |
 | `update-vm.sh` | Host-side. Applies the current `dev.yaml` to the existing VM with a restart, no rebuild, and shows the boot's provision warnings. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
@@ -383,9 +385,9 @@ Each port is set in the project's own repo, so the dev server always starts ther
 
 How it works:
 
-- **Caddy runs in the VM** on port 80, bound to the VM's localhost. It reads the `Host` header and passes each request to that name's port. The Caddyfile is in `dev.yaml` (the Caddy step), and every boot rewrites `/etc/caddy/Caddyfile` from it, so make changes in `dev.yaml`, not in the VM.
+- **Caddy runs in the VM** on port 80, bound to the VM's localhost. It reads the `Host` header and passes each request to that name's port. The Caddyfile is in `provision/caddy.sh`, and every boot rewrites `/etc/caddy/Caddyfile` from it, so make changes there, not in the VM.
 - **One `portForwards` entry** carries the VM's port 80 to the Mac's port 8000 on localhost, for all the names. It is 8000, not 80, because Lima did not forward the Mac's privileged port 80; Caddy matches the name and ignores the port. Caddy is inside the VM, so it can reach any VM port: a new name needs no new forward.
-- **The Mac's `/etc/hosts`** points each name at `127.0.0.1`. `./bootstrap.sh` (and so `./update-vm.sh`) adds every `http://<name>.devvm` it finds in `dev.yaml`, and asks for your sudo password only when a name is missing.
+- **The Mac's `/etc/hosts`** points each name at `127.0.0.1`. `./bootstrap.sh` (and so `./update-vm.sh`) adds every `http://<name>.devvm` it finds in `provision/caddy.sh`, and asks for your sudo password only when a name is missing.
 - **Plain HTTP only** (`http://` in front of each name), so there are no certificates to trust.
 - The old `localhost:PORT` addresses still work.
 
@@ -403,7 +405,7 @@ How it works:
 
    Other servers: set the port in their config or start script. If a server builds absolute links or opens a websocket to itself (Hugo does both), tell it its public address is `http://<name>.devvm:8000`, as `blog-serve` does.
 
-2. **Add a block to the Caddyfile in `dev.yaml`** (search for `http://sonar.devvm`). The block must start with a tab, like the others:
+2. **Add a block to the Caddyfile in `provision/caddy.sh`** (search for `http://sonar.devvm`). The block must start with a tab, like the others:
 
    ```
    http://myapp.devvm {
@@ -415,7 +417,7 @@ How it works:
 
 4. **Start the dev server in the VM** and open http://myapp.devvm:8000 on the Mac. Then add the name to the table above.
 
-To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `dev.yaml` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`. If every name hangs, something else on the Mac holds port 8000, so Lima could not take it: `sudo lsof -nP -iTCP:8000 -sTCP:LISTEN` on the Mac shows what. VS Code did once (see **VS Code**); free the port, then run `./update-vm.sh`, because Lima only sets up the forward at boot.
+To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `provision/caddy.sh` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`. If every name hangs, something else on the Mac holds port 8000, so Lima could not take it: `sudo lsof -nP -iTCP:8000 -sTCP:LISTEN` on the Mac shows what. VS Code did once (see **VS Code**); free the port, then run `./update-vm.sh`, because Lima only sets up the forward at boot.
 
 ## Secret scanning
 
@@ -518,7 +520,7 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 
 ## Project standards
 
-`~/projects/CLAUDE.md` holds the standards every project under `~/projects` follows. Claude Code reads `CLAUDE.md` files in parent directories, so every session in a project picks them up. Like `~/.claude/CLAUDE.md`, it is rewritten on every boot from the `projects-CLAUDE.md` data entry in `dev.yaml`: change the standards there. Detail for one repo goes in that repo's own `CLAUDE.md`.
+`~/projects/CLAUDE.md` holds the standards every project under `~/projects` follows. Claude Code reads `CLAUDE.md` files in parent directories, so every session in a project picks them up. Like `~/.claude/CLAUDE.md`, it is rewritten on every boot from `files/projects-CLAUDE.md`: change the standards there. Detail for one repo goes in that repo's own `CLAUDE.md`.
 
 | Standard | Why |
 |---|---|
@@ -592,7 +594,7 @@ Claude only uses the database if it knows it's there. Add something like this to
 
 ## The rule
 
-> **If something is installed in the VM and not in `dev.yaml`, that is a bug in `dev.yaml`.**
+> **If something is installed in the VM and not in `dev.yaml` (or the `provision/` and `files/` it points at), that is a bug there.**
 
 `vmType: vz` means no snapshots (`limactl snapshot` is QEMU-only). There is no restore point — recovery is `limactl delete dev && ./bootstrap.sh`, which only works if this file is complete. So never fix a missing package with a bare `sudo apt install`; add it here and reprovision.
 
@@ -612,13 +614,13 @@ This bumps every project at once. That is the intent, and also the risk — it's
 
 Lima runs the provision scripts on **every boot**, not only on create, so a restart is enough for an additive change such as a new entry in the skills list. It is the cheap path: the existing disk, clones and logins survive.
 
-The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, which was taken from `dev.yaml` when the VM was created. Editing `dev.yaml` here changes nothing until that copy is replaced. On the host:
+The catch: a restart reads the instance's own copy, `~/.lima/dev/lima.yaml`, which was taken from `dev.yaml` when the VM was created. Editing `dev.yaml`, `provision/` or `files/` here changes nothing until that copy is replaced. On the host:
 
 ```bash
 ./update-vm.sh
 ```
 
-It pulls, drops the shared SSH connection, stops the VM, copies `dev.yaml` over `~/.lima/dev/lima.yaml`, and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
+It pulls, drops the shared SSH connection, stops the VM, writes `dev.yaml` over `~/.lima/dev/lima.yaml` with `limactl template copy --embed` (which copies in every `provision/` and `files/` file the steps point at; a plain `cp` would leave paths that do not resolve from `~/.lima`), and runs `./bootstrap.sh`, which starts the VM and rewrites the `~/.ssh/config` block. Last, it lists this boot's provision warnings (lines starting `! `), since a best-effort step that skipped something does not fail the boot.
 
 Each provision step skips work it already did (the skills step installs only skills whose `SKILL.md` is missing), so a restart re-runs them quickly. Two steps also update on every boot: plugins move to their latest version, and `npx skills update -g` re-copies any skill that changed on GitHub (overwriting local edits to it). Check the result:
 
@@ -626,13 +628,13 @@ Each provision step skips work it already did (the skills step installs only ski
 limactl shell dev -- ls ~/.claude/skills
 ```
 
-A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
+A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in `provision/skills.sh`. Start a new Claude Code session afterwards, because skills load at session start.
 
-The user-wide `~/.claude/CLAUDE.md` (instructions every Claude Code session in the VM reads) is also rewritten on every boot, from the `CLAUDE.md` data entry in `dev.yaml`. Add or change an instruction there, not in the VM, or the next restart undoes it. The Mac has its own `~/.claude/CLAUDE.md` for sessions run on the host; keep the two in step.
+The user-wide `~/.claude/CLAUDE.md` (instructions every Claude Code session in the VM reads) is also rewritten on every boot, from `files/CLAUDE.md`. Add or change an instruction there, not in the VM, or the next restart undoes it. The Mac has its own `~/.claude/CLAUDE.md` for sessions run on the host; keep the two in step.
 
-`~/projects/CLAUDE.md` works the same way, from the `projects-CLAUDE.md` data entry; see [Project standards](#project-standards).
+`~/projects/CLAUDE.md` works the same way, from `files/projects-CLAUDE.md`; see [Project standards](#project-standards).
 
-Plugins (currently `sdlc-pipeline` and `ponytail`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI install is best-effort and may not have happened yet. Enabling a plugin there does not install it. So once a `claude` CLI exists (the provisioned `~/.local/bin/claude`, or the desktop app's own copy), every boot also adds a missing marketplace, installs a missing plugin, and runs `claude plugin marketplace update` and `claude plugin update` (user scope) for the rest, so a restart installs a newly listed plugin and brings the others to their latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add <owner>/<repo>` and `claude plugin install <plugin>@<marketplace>` there, with the values from the plugins list in `dev.yaml` (for example `prule/sdlc-pipeline` and `sdlc-pipeline@sdlc-pipeline`).
+Plugins (currently `sdlc-pipeline` and `ponytail`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI install is best-effort and may not have happened yet. Enabling a plugin there does not install it. So once a `claude` CLI exists (the provisioned `~/.local/bin/claude`, or the desktop app's own copy), every boot also adds a missing marketplace, installs a missing plugin, and runs `claude plugin marketplace update` and `claude plugin update` (user scope) for the rest, so a restart installs a newly listed plugin and brings the others to their latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add <owner>/<repo>` and `claude plugin install <plugin>@<marketplace>` there, with the values from the plugins list in `provision/plugins.sh` (for example `prule/sdlc-pipeline` and `sdlc-pipeline@sdlc-pipeline`).
 
 Use the full rebuild above instead when a change is not additive: removing a package, changing a version pin, or changing the disk.
 
@@ -703,4 +705,4 @@ For this workload (Node and pnpm, Supabase in Docker, IDE backends that want loc
 
 Per-project `.devcontainer/` directories and their docs, Docker Desktop, and every workaround that existed only because the environments were separate: `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`, `PLAYWRIGHT_SKIP_BROWSER_GC`, `--add-host=host.docker.internal`, the shared `/cache` volume convention, the `pnpm config set store-dir` double-write under two `XDG_CONFIG_HOME` values, and the "never mount a volume at `PNPM_HOME`" rule.
 
-Each of those is marked `GONE:` at the point in `dev.yaml` where the ported step used to be, so the omissions are reviewable rather than forgotten.
+Each of those is marked `GONE:` at the point in `dev.yaml` or `provision/` where the ported step used to be, so the omissions are reviewable rather than forgotten.

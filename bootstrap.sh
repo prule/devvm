@@ -88,10 +88,10 @@ install -m 600 "$tmp" ~/.ssh/config && rm -f "$tmp"
 
 # --- 4. Service names ---------------------------------------------------------
 # Caddy in the VM routes http://<name>.devvm to a VM port; the Mac must resolve
-# each name to 127.0.0.1. Names come from dev.yaml's Caddyfile. Only asks for
+# each name to 127.0.0.1. Names come from the Caddyfile in provision/caddy.sh. Only asks for
 # sudo when a name is missing.
 missing=""
-for name in $(grep -oE 'http://[a-z0-9-]+\.devvm' "$HERE/dev.yaml" | sed 's|http://||' | sort -u); do
+for name in $(grep -oE 'http://[a-z0-9-]+\.devvm' "$HERE/provision/caddy.sh" | sed 's|http://||' | sort -u); do
   awk -v n="$name" '$1=="127.0.0.1" { for (i=2; i<=NF; i++) if ($i==n) f=1 } END { exit !f }' /etc/hosts \
     || missing="$missing $name"
 done

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Added by devvm: secret scan before every commit (devvm README, Secret scanning).
+exec /usr/local/bin/devvm-secret-scan
