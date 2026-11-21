@@ -31,7 +31,7 @@ rosetta:
 # needs, so this is up from the 4/12 of the mounted-folder design.
 # This is the one knob to turn if things feel tight.
 cpus: 6           # of 8
-memory: 10GiB     # of 24 — leaves 14GB for macOS, Xcode and the thin clients
+memory: 14GiB     # of 24 — leaves 10GB for macOS, Xcode and the thin clients; up from 10 when SonarQube ran out
 # Measured, not guessed. Tracked source plus git history is small — well under
 # 1GB across every project. The budget:
 #
@@ -1228,8 +1228,8 @@ provision:
       ## JavaScript and TypeScript
 
       - Always use `pnpm` instead of `npm`: `pnpm install`, `pnpm run <script>`, `pnpm exec <command>`. Do not run `npm` or `npx`.
-      - Lint with ESLint and format with Prettier; `tsconfig` has `"strict": true`.
-      - The `test` script fixes first, then tests, e.g. `eslint --fix . && prettier --write . && vitest run`, and a `lint` script (`eslint . && prettier --check .`) is what CI runs. Do not rely on a `pretest` script: pnpm may not run pre/post scripts.
+      - Lint with ESLint, or oxlint if the user prefers it, and format with Prettier; `tsconfig` has `"strict": true`.
+      - The `test` script fixes first, then tests, e.g. `eslint --fix . && prettier --write . && vitest run` (`oxlint --fix` in place of `eslint --fix` with oxlint), and a `lint` script (`eslint . && prettier --check .`) is what CI runs. Do not rely on a `pretest` script: pnpm may not run pre/post scripts.
       - Run `pnpm audit` after adding a dependency, and do not leave high or critical findings.
 
   - mode: user
@@ -1328,6 +1328,7 @@ provision:
       Work at the repo root; in a pnpm workspace, add the tools once at the root with `pnpm add -D -E -w`.
 
       - Tools: `pnpm add -D -E eslint @eslint/js typescript-eslint eslint-config-prettier prettier`, plus the framework's plugin if one is used (`eslint-plugin-react-hooks`). Write a flat `eslint.config.js` from `@eslint/js` recommended, `typescript-eslint` recommended and `eslint-config-prettier` last. Add a `.prettierignore` for build output.
+      - oxlint instead of ESLint, only when the user asks for it or the repo already uses it: `pnpm add -D -E oxlint prettier`, `pnpm exec oxlint --init` for `.oxlintrc.json`, and `oxlint` for `eslint` in the scripts and lint-staged below. Drop ESLint and its config rather than run both.
       - Scripts (keep the repo's own test runner in place of `vitest run`):
 
       ```json
@@ -1509,7 +1510,7 @@ provision:
                   continue
               if "test" not in scripts:
                   gaps.append(f"js {loc(p)}: no test script")
-              elif not re.search(r"\b(fix|format|lint|eslint|prettier)\b", scripts["test"]):
+              elif not re.search(r"\b(fix|format|lint|eslint|oxlint|prettier)\b", scripts["test"]):
                   gaps.append(f"js {loc(p)}: test script does not format/lint first")
               if "lint" not in scripts:
                   gaps.append(f"js {loc(p)}: no lint script")
@@ -1520,8 +1521,8 @@ provision:
                       root_deps = {**deps, **rj.get("dependencies", {}), **rj.get("devDependencies", {})}
                   except ValueError:
                       pass
-              if "eslint" not in root_deps:
-                  gaps.append(f"js {loc(p)}: no eslint")
+              if "eslint" not in root_deps and "oxlint" not in root_deps:
+                  gaps.append(f"js {loc(p)}: no eslint or oxlint")
               if "prettier" not in root_deps:
                   gaps.append(f"js {loc(p)}: no prettier")
               tsconfigs = list(p.parent.glob("tsconfig*.json"))

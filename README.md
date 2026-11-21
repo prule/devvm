@@ -118,7 +118,7 @@ WebStorm has no Java support: no completion, refactoring, Gradle import or Java 
 
 - **Remote development needs a paid subscription.** IntelliJ IDEA has been one download with a free tier since 2025.3. The free tier covers Java, Kotlin, Gradle and Maven, plus basic JavaScript/TypeScript since 2026.1. Gateway's remote mode is not in it, though, so the free tier can only open code on the Mac, and here the code lives only in the VM. Without a subscription, use VS Code for Java (see **VS Code → Java** below).
 - **Ultimate covers what WebStorm does,** so one IntelliJ backend can serve Java and TypeScript repos, instead of two.
-- **Each backend is its own JVM in the VM** (roughly 2–4 GB). WebStorm and IntelliJ backends running at once take a real share of the VM's 10 GiB, next to SonarQube and Postgres.
+- **Each backend is its own JVM in the VM** (roughly 2–4 GB). WebStorm and IntelliJ backends running at once take a real share of the VM's 14 GiB, next to SonarQube and Postgres.
 - **JDK:** set the project SDK to SDKMAN's install, `~/.sdkman/candidates/java/25.0.4-tem` or `21.0.12-tem` (see **JVM versions**).
 - **Turn off SSH agent forwarding** in the IntelliJ window too, as for WebStorm above. It is a separate setting per IDE.
 
@@ -531,8 +531,8 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 | GitHub secret scanning with push protection on in every repo | The commit hook only runs in the VM. Push protection also covers commits made on the Mac (see [Secret scanning](#secret-scanning)). |
 | Java: Spotless, PMD and SpotBugs (or Error Prone) in the build | They go in each project's Gradle or Maven build, not the VM, so CI and any other machine run the same checks. Gradle's plugins hook into `check`. Outside CI, `compileJava` depends on `spotlessApply`; in Maven, `spotless:apply` is bound to `process-sources` in a profile that is off when `CI` is set. |
 | Java: build with `./gradlew` or `./mvnw` | The wrapper pins the build tool's version in the repo. A system Gradle or Maven can differ from what CI uses. |
-| JS/TS: pnpm, ESLint, Prettier, strict TypeScript | pnpm is the house package manager. `strict` catches null and type errors at compile time. |
-| JS/TS: the `test` script runs `eslint --fix`, `prettier --write`, then the tests; CI runs a check-only `lint` script | The same format-in-the-build rule as above. It is part of `test` itself, not a `pretest` script, because pnpm may not run pre/post scripts. |
+| JS/TS: pnpm, ESLint (or oxlint, if you prefer), Prettier, strict TypeScript | pnpm is the house package manager. oxlint is a much faster linter with fewer rules and plugins. `strict` catches null and type errors at compile time. |
+| JS/TS: the `test` script runs `eslint --fix` (or `oxlint --fix`), `prettier --write`, then the tests; CI runs a check-only `lint` script | The same format-in-the-build rule as above. It is part of `test` itself, not a `pretest` script, because pnpm may not run pre/post scripts. |
 | JS/TS: `pnpm audit` after adding a dependency | It catches a known-vulnerable package when it is added, not months later. |
 
 These are instructions to Claude, not checks. Nothing enforces them in an existing repo until its build is set up this way.
