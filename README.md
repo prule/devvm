@@ -14,7 +14,7 @@ macOS host (thin)                      Lima VM "dev" (Ubuntu 24.04 arm64)
 │                                      ├── Postgres (Docker): dev_ro + dev_rw
 ├── Browser → localhost:5173, :9000,   ├── SDKMAN: Java 25 + 21, Playwright, Electron
 │       :1313 (blog preview)           ├── Hugo dev server for pauls-blog
-├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, gitleaks
+├── Xcode / iOS Simulator              ├── Docker, Supabase CLI, claude CLI, betterleaks
 └── Time Machine (excludes ~/.lima)    └── ~/.claude, ~/.config/gh (one login)
 
 Two thin clients on the Mac, one box doing the work. No shared folders.
@@ -360,7 +360,7 @@ ssh lima-dev blog-serve
 
 ## Secret scanning
 
-Every commit in the VM is checked for secrets (API keys, tokens, private keys, passwords in connection strings) by [gitleaks](https://github.com/gitleaks/gitleaks) before it is made. If gitleaks finds one, the commit is refused and the output shows the file, the line and the rule, with the secret itself redacted. The main risk it covers is an agent pasting a key into a file and committing it.
+Every commit in the VM is checked for secrets (API keys, tokens, private keys, passwords in connection strings) by [betterleaks](https://github.com/betterleaks/betterleaks) (from the makers of gitleaks) before it is made. If betterleaks finds one, the commit is refused and the output shows the file, the line and the rule, with the secret itself redacted. The main risk it covers is an agent pasting a key into a file and committing it.
 
 `dev.yaml` sets this up in three ways, because no single one reaches every repo:
 
@@ -370,12 +370,12 @@ Every commit in the VM is checked for secrets (API keys, tokens, private keys, p
 
 Each hook is a one-line script that calls `/usr/local/bin/devvm-secret-scan`, so a change to the scan reaches every repo on the next boot.
 
-**False positives.** Add a `gitleaks:allow` comment on the line, or add the `Fingerprint` from the output to `.gitleaksignore` at the repo root and commit that file. A `.gitleaks.toml` at the repo root changes the rules for that repo.
+**False positives.** Add a `betterleaks:allow` comment on the line, or add the `Fingerprint` from the output to `.betterleaksignore` at the repo root and commit that file. A `.betterleaks.toml` at the repo root changes the rules for that repo; the scan passes it with `--config`, since betterleaks does not load it on its own. Its syntax is not gitleaks': exemptions are Expr `filter`s, not `[[allowlists]]`.
 
 **Scan a repo's history** (the hook only checks new commits):
 
 ```bash
-gitleaks git --redact -v
+betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has one
 ```
 
 **Limits:**
