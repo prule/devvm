@@ -420,11 +420,11 @@ Every commit in the VM is checked for secrets (API keys, tokens, private keys, p
 
 `dev.yaml` sets this up in three ways, because no single one reaches every repo:
 
-- **New repos:** `/etc/gitconfig` sets `init.templateDir`, so `git clone` and `git init` copy a `pre-commit` hook into each new repo.
+- **New repos:** `/etc/gitconfig` sets `init.templateDir` to `/usr/local/share/devvm/git-template`, so `git clone` and `git init` copy a `pre-commit` hook into each new repo.
 - **Existing repos:** on every boot, each repo under `~/projects` that has no `pre-commit` hook gets the same hook. A repo that already has a different `pre-commit` hook (lefthook, the pre-commit framework, or a hand-written one) is left alone. The boot prints a `!` warning naming it, because commits there are **not** scanned.
 - **Husky repos:** Husky sets `core.hooksPath`, so git ignores `.git/hooks` there. Husky v9 runs `~/.config/husky/init.sh` before each of its hooks, and the boot adds the scan there. This only applies to repos that have a `.husky/pre-commit` file.
 
-Each hook is a one-line script that calls `/usr/local/bin/devvm-secret-scan`, so a change to the scan reaches every repo on the next boot.
+Each hook is a one-line script that calls `/usr/local/bin/devvm-secret-scan`, so a change to the scan reaches every repo on the next boot. To check that a repo is covered, look for `.git/hooks/pre-commit`, or for `.husky/pre-commit` in a Husky repo.
 
 **False positives.** Add a `betterleaks:allow` comment on the line, or add the `Fingerprint` from the output to `.betterleaksignore` at the repo root and commit that file. A `.betterleaks.toml` at the repo root changes the rules for that repo; the scan passes it with `--config`, since betterleaks does not load it on its own. Its syntax is not gitleaks': exemptions are Expr `filter`s, not `[[allowlists]]`.
 
@@ -437,6 +437,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 **Limits:**
 
 - `git commit --no-verify` skips every hook, this one included. The user-wide `CLAUDE.md` tells Claude not to use it unless you ask.
+- If betterleaks is not installed (its download failed during `./update-vm.sh`), the hook prints a warning and lets the commit through **unscanned**. Re-run `./update-vm.sh` to fix it.
 - Nothing scans commits made on the Mac.
 - As a backstop, turn on GitHub's secret scanning with push protection in each repo's **Settings → Advanced Security**. It is free for public repos and blocks a push that contains a known token format.
 
@@ -510,6 +511,28 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 - **No branch or pull-request analysis.** Each repo has one analysis, and every scan replaces it, whichever branch you are on. That's fine for one person working one branch at a time.
 - **About 2–3 GB of RAM** while running. If the VM feels tight, run `docker stop sonarqube`; it stays stopped until `docker start sonarqube`, even across reboots. `sonar-check` says so if it can't reach the server.
 - **Version bumps need a rebuild.** It uses the embedded H2 database, which SonarQube can't upgrade in place. The rebuild that a `SONARQUBE_VERSION` bump already requires starts it fresh. Redo the one-time setup afterwards.
+
+## Project standards
+
+`~/projects/CLAUDE.md` holds the standards every project under `~/projects` follows. Claude Code reads `CLAUDE.md` files in parent directories, so every session in a project picks them up. Like `~/.claude/CLAUDE.md`, it is rewritten on every boot from the `projects-CLAUDE.md` data entry in `dev.yaml`: change the standards there. Detail for one repo goes in that repo's own `CLAUDE.md`.
+
+| Standard | Why |
+|---|---|
+| Run the tests and `sonar-check` before reporting work as done | An agent's "done" should mean the checks passed, not that the code was written. |
+| Formatting and linting run inside the normal test/verify command: format and auto-fix first, then fail on what is left | If formatting only happens at commit, the tests and `sonar-check` run on code that the hook then rewrites, and lint failures turn up after the work was reported done. In the build, they happen as a matter of course, with no extra step to forget. |
+| In CI (`CI` set), the build only checks and never rewrites | CI must fail on unformatted code. If it formatted, it would pass and the fix would never reach the repo. |
+| The format-on-commit hook stays, as a backstop | It catches edits made outside the build, such as a quick fix in the IDE. |
+| Use `./run` when the repo has one | It holds the repo's own way to set up, serve and build, so nobody has to guess the commands. |
+| Pin dependency versions; Renovate bumps them | Builds are reproducible, and every upgrade is a reviewed PR, not a surprise in the next install. |
+| `shellcheck` for shell scripts, `hadolint` for Dockerfiles | Both catch common, quiet bugs (unquoted variables, unpinned base images). The VM installs both, and `limactl start` checks for them. |
+| GitHub secret scanning with push protection on in every repo | The commit hook only runs in the VM. Push protection also covers commits made on the Mac (see [Secret scanning](#secret-scanning)). |
+| Java: Spotless, PMD and SpotBugs (or Error Prone) in the build | They go in each project's Gradle or Maven build, not the VM, so CI and any other machine run the same checks. Gradle's plugins hook into `check`. Outside CI, `compileJava` depends on `spotlessApply`; in Maven, `spotless:apply` is bound to `process-sources` in a profile that is off when `CI` is set. |
+| Java: build with `./gradlew` or `./mvnw` | The wrapper pins the build tool's version in the repo. A system Gradle or Maven can differ from what CI uses. |
+| JS/TS: pnpm, ESLint, Prettier, strict TypeScript | pnpm is the house package manager. `strict` catches null and type errors at compile time. |
+| JS/TS: the `test` script runs `eslint --fix`, `prettier --write`, then the tests; CI runs a check-only `lint` script | The same format-in-the-build rule as above. It is part of `test` itself, not a `pretest` script, because pnpm may not run pre/post scripts. |
+| JS/TS: `pnpm audit` after adding a dependency | It catches a known-vulnerable package when it is added, not months later. |
+
+These are instructions to Claude, not checks. Nothing enforces them in an existing repo until its build is set up this way.
 
 ## Dev database (Postgres)
 
@@ -592,6 +615,8 @@ limactl shell dev -- ls ~/.claude/skills
 A skill that fails to install does not fail the boot, so the `ls` is the check — a missing directory means a skipped skill. Install it by hand with the command in the skills step of `dev.yaml`. Start a new Claude Code session afterwards, because skills load at session start.
 
 The user-wide `~/.claude/CLAUDE.md` (instructions every Claude Code session in the VM reads) is also rewritten on every boot, from the `CLAUDE.md` data entry in `dev.yaml`. Add or change an instruction there, not in the VM, or the next restart undoes it. The Mac has its own `~/.claude/CLAUDE.md` for sessions run on the host; keep the two in step.
+
+`~/projects/CLAUDE.md` works the same way, from the `projects-CLAUDE.md` data entry; see [Project standards](#project-standards).
 
 Plugins (currently `sdlc-pipeline` and `ponytail`) are different: the provision only writes them into `~/.claude/settings.json` as `extraKnownMarketplaces` and `enabledPlugins`, because the `claude` CLI install is best-effort and may not have happened yet. Enabling a plugin there does not install it. So once a `claude` CLI exists (the provisioned `~/.local/bin/claude`, or the desktop app's own copy), every boot also adds a missing marketplace, installs a missing plugin, and runs `claude plugin marketplace update` and `claude plugin update` (user scope) for the rest, so a restart installs a newly listed plugin and brings the others to their latest version. The marketplace entries also set `autoUpdate`, which checks again at each session start. Both act only when the plugin's `plugin.json` version has been bumped. Project-scope installs (made with `--scope project` inside a repo) are not touched; update those from inside that repo. Check with `/plugin` in a session in the VM; if one is missing, run `claude plugin marketplace add <owner>/<repo>` and `claude plugin install <plugin>@<marketplace>` there, with the values from the plugins list in `dev.yaml` (for example `prule/sdlc-pipeline` and `sdlc-pipeline@sdlc-pipeline`).
 

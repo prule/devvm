@@ -194,6 +194,9 @@ param:
   # pre-commit hook runs (see devvm-secret-scan below).
   # renovate: datasource=github-releases depName=betterleaks/betterleaks extractVersion=^v(?<version>.*)$
   BETTERLEAKS_VERSION: "1.10.1"
+  # hadolint, the Dockerfile linter ~/projects/CLAUDE.md asks for.
+  # renovate: datasource=github-releases depName=hadolint/hadolint extractVersion=^v(?<version>.*)$
+  HADOLINT_VERSION: "2.15.1"
   # The dev database (container), and the major of the psql client too. A
   # major bump needs a rebuild: Postgres data directories do not carry across
   # majors without a dump and restore.
@@ -244,7 +247,7 @@ provision:
       # ruby-asciidoctor-pdf: its CV's generate-pdf.sh.
       apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg zip unzip zsh ripgrep jq less \
-        build-essential python3-venv pipx \
+        build-essential python3-venv pipx shellcheck \
         asciidoctor ruby-rouge ruby-asciidoctor-pdf
 
       # --- Postgres client ----------------------------------------------------
@@ -1186,6 +1189,66 @@ provision:
       install -m 644 /usr/local/share/devvm/CLAUDE.md "$HOME/.claude/CLAUDE.md"
 
   # ---------------------------------------------------------------------------
+  # DATA: ~/projects/CLAUDE.md, the standards every project under ~/projects
+  # follows (Claude Code reads CLAUDE.md files in parent directories). Staged
+  # and copied like the user-wide one above, and rewritten on every boot, so
+  # edit it HERE. Per-repo detail belongs in the repo's own CLAUDE.md. The
+  # reason for each rule is in the devvm README, Project standards; keep the
+  # two in step.
+  # ---------------------------------------------------------------------------
+  - mode: data
+    path: /usr/local/share/devvm/projects-CLAUDE.md
+    content: |
+      # Project standards
+
+      <!-- Generated from devvm/dev.yaml on every boot. Edit it there; changes made here are lost on restart. -->
+
+      ## All projects
+
+      - Before reporting work as done, run the project's tests and `sonar-check`, and fix what fails.
+      - If the repo has an executable `./run` at its root, use it for setup, serve, build and other project tasks.
+      - Formatting and linting are part of the build, so the normal test command does them with no separate step: it formats and auto-fixes first, then fails on what is left. In CI (`CI` is set) it only checks, never rewrites. See Java and JavaScript below.
+      - A format-on-commit hook stays as a backstop: Husky + lint-staged where there is a `package.json`, a native Git hook (`core.hooksPath`) in a JVM-only repo. CI runs the same checks as the build.
+      - Pin dependency versions (no floating ranges) and let Renovate bump them.
+      - Shell scripts pass `shellcheck`; Dockerfiles pass `hadolint`.
+      - Every repo's own GitHub secret scanning with push protection is on (Settings → Advanced Security). Remind the user if a repo you work on does not have it.
+
+      ## Java
+
+      - Format with Spotless (google-java-format or palantir-java-format), and run PMD and SpotBugs (or Error Prone), failing the build on violations.
+      - Gradle: the plugins hook their checks into `check`; outside CI, also make `compileJava` depend on `spotlessApply`.
+      - Maven: bind `spotless:apply` to `process-sources` outside CI (a profile off when `env.CI` is set), and `spotless:check`, `pmd:check` and `spotbugs:check` to `verify`.
+      - Build with the wrapper (`./gradlew` or `./mvnw`), never a system Gradle or Maven.
+
+      ## JavaScript and TypeScript
+
+      - Always use `pnpm` instead of `npm`: `pnpm install`, `pnpm run <script>`, `pnpm exec <command>`. Do not run `npm` or `npx`.
+      - Lint with ESLint and format with Prettier; `tsconfig` has `"strict": true`.
+      - The `test` script fixes first, then tests, e.g. `eslint --fix . && prettier --write . && vitest run`, and a `lint` script (`eslint . && prettier --check .`) is what CI runs. Do not rely on a `pretest` script: pnpm may not run pre/post scripts.
+      - Run `pnpm audit` after adding a dependency, and do not leave high or critical findings.
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      mkdir -p "$HOME/projects"
+      install -m 644 /usr/local/share/devvm/projects-CLAUDE.md "$HOME/projects/CLAUDE.md"
+
+  # SYSTEM: hadolint, for the Dockerfile rule above (shellcheck comes from
+  # apt). Best-effort, like betterleaks.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -uo pipefail
+      if [ "$(hadolint --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)" != "${PARAM_HADOLINT_VERSION}" ]; then
+        curl -fsSL -o /tmp/hadolint \
+          "https://github.com/hadolint/hadolint/releases/download/v${PARAM_HADOLINT_VERSION}/hadolint-linux-arm64" \
+          && install -m 0755 /tmp/hadolint /usr/local/bin/hadolint \
+          || echo "! hadolint skipped — re-run ./update-vm.sh"
+        rm -f /tmp/hadolint
+      fi
+
+  # ---------------------------------------------------------------------------
   # USER: Claude Code plugins, user-level. First declare the marketplace and
   # enable the plugin in ~/.claude/settings.json, which needs no CLI. autoUpdate
   # makes Claude Code check the marketplace for a newer plugin version at each
@@ -1314,6 +1377,13 @@ probes:
       test "$(git config --system init.templateDir)" = /usr/local/share/devvm/git-template
       test -x /usr/local/share/devvm/git-template/hooks/pre-commit
     hint: "Commits are not being scanned for secrets. Re-run ./update-vm.sh and check its warnings"
+  - description: "Linters (shellcheck, hadolint)"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      shellcheck --version
+      hadolint --version
+    hint: "shellcheck or hadolint is missing. Re-run ./update-vm.sh and check its warnings"
   - description: "Postgres (dev database)"
     script: |
       #!/bin/bash
