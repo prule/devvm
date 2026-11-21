@@ -438,6 +438,7 @@ betterleaks git --redact -v   # add --config .betterleaks.toml if the repo has o
 
 - `git commit --no-verify` skips every hook, this one included. The user-wide `CLAUDE.md` tells Claude not to use it unless you ask.
 - If betterleaks is not installed (its download failed during `./update-vm.sh`), the hook prints a warning and lets the commit through **unscanned**. Re-run `./update-vm.sh` to fix it.
+- A repo that sets `core.hooksPath` to its own folder (a native hook, not Husky) makes git skip `.git/hooks`, so the scan does not run unless that folder's `pre-commit` calls `devvm-secret-scan`. The `apply-project-standards` skill adds that line; `standards-check` flags a hook without it.
 - Nothing scans commits made on the Mac.
 - As a backstop, turn on GitHub's secret scanning with push protection in each repo's **Settings → Advanced Security**. It is free for public repos and blocks a push that contains a known token format.
 
@@ -533,6 +534,16 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 | JS/TS: `pnpm audit` after adding a dependency | It catches a known-vulnerable package when it is added, not months later. |
 
 These are instructions to Claude, not checks. Nothing enforces them in an existing repo until its build is set up this way.
+
+**Applying them to a repo.** In a Claude Code session in the repo, say "apply project standards". That runs the `apply-project-standards` skill, which `dev.yaml` installs into `~/.claude/skills` on every boot. It runs `standards-check`, fixes each gap with a fixed recipe (the Gradle and Maven plugin setup, the `package.json` scripts, hooks, `renovate.json`), gets the build green after each part, and reports what it changed. When a new checker finds many existing violations, it stops and asks rather than fixing hundreds of lines or turning the checker off. It asks before changing GitHub settings and does not commit unless asked. The skill holds only the recipes; the rules stay in `~/projects/CLAUDE.md`.
+
+**Checking a repo.** `standards-check` (in the VM's `PATH`) lists one gap per line and exits 1 if there are any. It is read-only, so it is also a quick way to see how far a repo is from the standards:
+
+```bash
+for r in ~/projects/current/*/; do echo "== $r"; standards-check "$r"; done
+```
+
+It is a heuristic: "has PMD" means the word appears in the build, not that PMD runs. A private repo on a free GitHub plan cannot have push protection, so it gets a `note:`, not a gap.
 
 ## Dev database (Postgres)
 
