@@ -74,6 +74,11 @@ def check(repo):
             gaps.append(f"js {loc(p)}: npm/yarn lockfile (use pnpm)")
         scripts = j.get("scripts", {})
         is_root = p.parent == repo
+        dev_pm = (j.get("devEngines") or {}).get("packageManager")
+        dev_pms = dev_pm if isinstance(dev_pm, list) else [dev_pm]  # the spec allows one or a list
+        if is_root and (not str(j.get("packageManager", "")).startswith("pnpm@")
+                        or not any(isinstance(d, dict) and d.get("name") == "pnpm" for d in dev_pms)):
+            gaps.append(f"js {loc(p)}: no pnpm packageManager/devEngines guard")
         if not is_root and not deps and not scripts:
             continue
         if "test" not in scripts:

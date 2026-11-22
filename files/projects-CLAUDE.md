@@ -22,6 +22,7 @@
 ## JavaScript and TypeScript
 
 - Always use `pnpm` instead of `npm`: `pnpm install`, `pnpm run <script>`, `pnpm exec <command>`. Do not run `npm` or `npx`.
+- The root `package.json` sets `"packageManager": "pnpm@<version>"` and `"devEngines": {"packageManager": {"name": "pnpm", "onFail": "error"}}`, so `npm install` fails in the repo on any machine.
 - Lint with ESLint, or oxlint if the user prefers it, and format with Prettier; `tsconfig` has `"strict": true`.
 - The `test` script fixes first, then tests, e.g. `eslint --fix . && prettier --write . && vitest run` (`oxlint --fix` in place of `eslint --fix` with oxlint), and a `lint` script (`eslint . && prettier --check .`) is what CI runs. Do not rely on a `pretest` script: pnpm may not run pre/post scripts.
 - Run `pnpm audit` after adding a dependency, and do not leave high or critical findings.

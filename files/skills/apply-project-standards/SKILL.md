@@ -88,6 +88,7 @@ Work at the repo root; in a pnpm workspace, add the tools once at the root with 
 - `tsconfig`: `"strict": true` in the config the compiler uses (`tsconfig.app.json` in a Vite project with references).
 - Floating ranges: add `save-exact=true` to `.npmrc`, then set each range to the version the lockfile resolved (`pnpm ls --depth 0 --json`), and run `pnpm install`.
 - An npm or yarn lockfile: delete it, `pnpm import` first if `pnpm-lock.yaml` is missing, then `pnpm install`.
+- Package manager guard, root `package.json` only: set `"packageManager": "pnpm@<pnpm -v>"` and `"devEngines": {"packageManager": {"name": "pnpm", "onFail": "error"}}`. Node 25+ has no Corepack, so `packageManager` alone does not stop npm; `devEngines` makes npm fail with `EBADDEVENGINES`.
 
 ## Hooks
 

@@ -30,6 +30,11 @@ echo "$plugins" | while read -r market repo plugin; do
   ' "$settings" > "$tmp" && mv "$tmp" "$settings"
 done
 
+# Enforce the pnpm rule in ~/projects/CLAUDE.md: Claude's npm/npx calls are refused, not just discouraged.
+tmp="$(mktemp)"
+jq '.permissions.deny = ((.permissions.deny // []) + ["Bash(npm:*)", "Bash(npx:*)"] | unique)' \
+  "$settings" > "$tmp" && mv "$tmp" "$settings"
+
 claude="$(command -v claude || command -v "$HOME/.local/bin/claude" || ls -d "$HOME"/.claude/remote/ccd-cli/* 2>/dev/null | sort -V | tail -1 || true)"
 [ -n "$claude" ] || exit 0
 # A plugin added to the list above is in settings.json but not installed
