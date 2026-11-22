@@ -378,10 +378,11 @@ Each web service in the VM gets a name on the Mac, all on one port, 8000, so you
 | http://strength2.devvm:8000 | 5183 |
 | http://strength.devvm:8000 | 5184 (`app/`) |
 | http://leave-planner.devvm:8000 | 5185 |
+| http://rubikscube.devvm:8000 | 5186 (`packages/ui-2d`) |
 | http://video-aggregator.devvm:8000 | 5200 |
 | http://portfolio.devvm:8000 | 8789 (`wrangler pages dev --port 8789`) |
 
-Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5186.
+Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5187.
 
 How it works:
 
@@ -397,7 +398,7 @@ How it works:
 
    ```ts
    server: {
-     port: 5186,
+     port: 5187,
      strictPort: true,
      allowedHosts: ['.devvm'], // Vite refuses unknown Host headers (403) without this
    },
@@ -409,7 +410,7 @@ How it works:
 
    ```
    http://myapp.devvm {
-   	reverse_proxy localhost:5186
+   	reverse_proxy localhost:5187
    }
    ```
 

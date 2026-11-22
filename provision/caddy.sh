@@ -45,6 +45,9 @@ http://strength.devvm {
 http://leave-planner.devvm {
 	reverse_proxy localhost:5185
 }
+http://rubikscube.devvm {
+	reverse_proxy localhost:5186
+}
 http://video-aggregator.devvm {
 	reverse_proxy localhost:5200
 }
