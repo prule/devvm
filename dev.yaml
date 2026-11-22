@@ -248,11 +248,11 @@ provision:
     file: provision/hugo.sh
 
   # ---------------------------------------------------------------------------
-  # DATA: `blog-serve`, Hugo's dev server for pauls-blog: drafts included (-D),
-  # rebuilds and live-reloads the browser on every save. devvm-blog.service
-  # (provision/hugo.sh) runs it on boot; run it by hand after `systemctl stop devvm-blog`
-  # to see its output in a terminal, or pass extra flags (e.g. -F for
-  # future-dated posts). Binds 127.0.0.1, so the portForwards entry for 1313
+  # DATA: `blog-serve`, Hugo's dev server for pauls-blog: drafts (-D) and
+  # future-dated posts (-F) included, rebuilds and live-reloads the browser on
+  # every save. devvm-blog.service (provision/hugo.sh) runs it on boot; run it
+  # by hand after `systemctl stop devvm-blog` to see its output in a terminal,
+  # or pass extra hugo server flags. Binds 127.0.0.1, so the portForwards entry for 1313
   # is what makes it reachable from the Mac.
   # ---------------------------------------------------------------------------
   - mode: data
