@@ -475,6 +475,8 @@ Do this once per VM. A rebuild (`limactl delete`) wipes SonarQube's database alo
    cd ~/projects/current/<repo> && sonar-check
    ```
 
+Anyone can read the server without logging in (the container sets `SONAR_FORCEAUTHENTICATION=false`), so agents can list issues with a plain `curl "http://localhost:9000/api/issues/search?components=<key>&resolved=false"`. Only scanning needs the token. A container created before this setting doesn't have it: turn off **Administration → Configuration → General Settings → Security → Force user authentication** instead.
+
 ### Scanning a repo
 
 `sonar-check` runs from anywhere in a git repo and scans the whole repo. It:
@@ -525,6 +527,7 @@ To make reviewers judge Sonar findings as well as run the scan, add a line under
 | Standard | Why |
 |---|---|
 | Run the tests and `sonar-check` before reporting work as done | An agent's "done" should mean the checks passed, not that the code was written. |
+| List SonarQube issues with an unauthenticated `curl` to `api/issues/search` | `sonar-check` prints only new-code issues, and only when the gate fails. The server allows anonymous reads (see SonarQube), so an agent needs no token to see the rest. |
 | Formatting and linting run inside the normal test/verify command: format and auto-fix first, then fail on what is left | If formatting only happens at commit, the tests and `sonar-check` run on code that the hook then rewrites, and lint failures turn up after the work was reported done. In the build, they happen as a matter of course, with no extra step to forget. |
 | In CI (`CI` set), the build only checks and never rewrites | CI must fail on unformatted code. If it formatted, it would pass and the fix would never reach the repo. |
 | The format-on-commit hook stays, as a backstop | It catches edits made outside the build, such as a quick fix in the IDE. |

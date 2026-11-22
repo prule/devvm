@@ -190,9 +190,12 @@ sysctl -p /etc/sysctl.d/62-sonarqube.conf
 # down after a `docker stop sonarqube`.
 # shortcut: embedded H2 database, which SonarQube cannot upgrade in place —
 # fine while a version bump means a VM rebuild; move to Postgres if not.
+# Anonymous read access, so agents can query issues with a plain curl; the
+# server is only on 127.0.0.1 and scans still need the token.
 docker inspect sonarqube > /dev/null 2>&1 \
   || docker run -d --name sonarqube --restart unless-stopped \
     -p 127.0.0.1:9000:9000 \
+    -e SONAR_FORCEAUTHENTICATION=false \
     -v sonarqube_data:/opt/sonarqube/data \
     -v sonarqube_extensions:/opt/sonarqube/extensions \
     -v sonarqube_logs:/opt/sonarqube/logs \
