@@ -22,7 +22,7 @@ fi
 # go through Caddy at http://hugo.devvm:8000 (the Mac's end of the
 # forward to Caddy's port 80), not straight to :1313.
 exec hugo server \
-  --buildDrafts \
+  --buildDrafts --buildFuture \
   --bind 127.0.0.1 --port 1313 \
   --baseURL http://hugo.devvm:8000/pauls-blog/ --appendPort=false \
   --liveReloadPort 8000 \
