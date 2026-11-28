@@ -32,6 +32,7 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 | `update-vm.sh` | Host-side. Applies the current `dev.yaml` to the existing VM with a restart, no rebuild, and shows the boot's provision warnings. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
 | `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
+| `make-bookmarks.sh` | Host-side. Writes a bookmarks file of every `*.devvm` name, for Safari's Start Page. See **Links on Safari's Start Page**. |
 | `clone-all.sh` | Run in the VM. Clones every project from the manifest, adds the worktrees, warns about what git does not cover. |
 | `migrate-repo.sh` | Run in the VM, once per repo. Drops `.devcontainer/`, pins Node, installs deps. |
 | `renovate.json` | Tells Renovate how to find the version pins in `dev.yaml`. See **Bumping the toolchain**. |
@@ -399,7 +400,7 @@ How it works:
 
    ```ts
    server: {
-     port: 5187,
+     port: 5188,
      strictPort: true,
      allowedHosts: ['.devvm'], // Vite refuses unknown Host headers (403) without this
    },
@@ -411,7 +412,7 @@ How it works:
 
    ```
    http://myapp.devvm {
-   	reverse_proxy localhost:5187
+   	reverse_proxy localhost:5188
    }
    ```
 
@@ -420,6 +421,16 @@ How it works:
 4. **Start the dev server in the VM** and open http://myapp.devvm:8000 on the Mac. Then add the name to the table above.
 
 To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `provision/caddy.sh` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`. If every name hangs, something else on the Mac holds port 8000, so Lima could not take it: `sudo lsof -nP -iTCP:8000 -sTCP:LISTEN` on the Mac shows what. VS Code did once (see **VS Code**); free the port, then run `./update-vm.sh`, because Lima only sets up the forward at boot.
+
+### Links on Safari's Start Page
+
+`./make-bookmarks.sh` (on the Mac) writes `~/Desktop/devvm-bookmarks.html`, one link per name in `provision/caddy.sh`. Pass a path to write it somewhere else.
+
+1. In Safari, choose **File → Import From → Bookmarks HTML File…** and pick the file. The links land in a new folder, usually **Imported**.
+2. Open **Bookmarks → Edit Bookmarks** (⌥⌘B) and drag them into **Favorites**.
+3. Open a new tab, click the settings button at the bottom right, and tick **Favorites**.
+
+Importing again adds a second copy rather than replacing the links, so after adding a route either drag in just the new link or delete the old ones first.
 
 ## Secret scanning
 
