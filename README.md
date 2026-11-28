@@ -32,7 +32,7 @@ Two thin clients on the Mac, one box doing the work. No shared folders.
 | `update-vm.sh` | Host-side. Applies the current `dev.yaml` to the existing VM with a restart, no rebuild, and shows the boot's provision warnings. |
 | `setup-github.sh` | Run once in the VM. VM-only SSH key + `gh auth login`. Interactive, so it can't live in `dev.yaml`. |
 | `make-manifest.sh` | Regenerates `repos.tsv`, `worktrees.tsv` and `not-in-git.txt` from a populated checkout. Run on the host. |
-| `make-bookmarks.sh` | Host-side. Writes a bookmarks file of every `*.devvm` name, for Safari's Start Page. See **Links on Safari's Start Page**. |
+| `make-bookmarks.sh` | Host-side. Writes a start page of every `*.devvm` name, which also imports as Safari bookmarks. See **A start page of links**. |
 | `clone-all.sh` | Run in the VM. Clones every project from the manifest, adds the worktrees, warns about what git does not cover. |
 | `migrate-repo.sh` | Run in the VM, once per repo. Drops `.devcontainer/`, pins Node, installs deps. |
 | `renovate.json` | Tells Renovate how to find the version pins in `dev.yaml`. See **Bumping the toolchain**. |
@@ -422,9 +422,13 @@ How it works:
 
 To try a route without a restart, edit `/etc/caddy/Caddyfile` in the VM and run `sudo systemctl reload caddy`, then add the same block to `provision/caddy.sh` so the next boot keeps it. If a name shows `502 Bad Gateway`, Caddy is fine but nothing is listening on that port: start the dev server. If the browser can't find the name at all, it is missing from the Mac's `/etc/hosts`. If every name hangs, something else on the Mac holds port 8000, so Lima could not take it: `sudo lsof -nP -iTCP:8000 -sTCP:LISTEN` on the Mac shows what. VS Code did once (see **VS Code**); free the port, then run `./update-vm.sh`, because Lima only sets up the forward at boot.
 
-### Links on Safari's Start Page
+### A start page of links
 
-`./make-bookmarks.sh` (on the Mac) writes `~/Desktop/devvm-bookmarks.html`, one link per name in `provision/caddy.sh`. Pass a path to write it somewhere else.
+`./make-bookmarks.sh` (on the Mac) writes `~/Desktop/devvm-bookmarks.html`: a page with a card for each name in `provision/caddy.sh`, in light or dark to match the Mac. Pass a path to write it somewhere else. Rerun it after adding a route.
+
+**Open it in every new tab.** In Safari, choose **Settings → General**, set **New tabs open with** (and **New windows open with**, if you like) to **Homepage**, and set **Homepage** to `file:///Users/<you>/Desktop/devvm-bookmarks.html`. Rerunning the script updates the page in place, so there is nothing to redo.
+
+**Or put the links in Safari's own Start Page.** The same file is also a bookmarks file:
 
 1. In Safari, choose **File → Import From → Bookmarks HTML File…** and pick the file. The links land in a new folder, usually **Imported**.
 2. Open **Bookmarks → Edit Bookmarks** (⌥⌘B) and drag them into **Favorites**.
