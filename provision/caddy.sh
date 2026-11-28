@@ -48,6 +48,9 @@ http://leave-planner.devvm {
 http://rubikscube.devvm {
 	reverse_proxy localhost:5186
 }
+http://rubikscube-3d.devvm {
+	reverse_proxy localhost:5187
+}
 http://video-aggregator.devvm {
 	reverse_proxy localhost:5200
 }

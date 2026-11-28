@@ -379,10 +379,11 @@ Each web service in the VM gets a name on the Mac, all on one port, 8000, so you
 | http://strength.devvm:8000 | 5184 (`app/`) |
 | http://leave-planner.devvm:8000 | 5185 |
 | http://rubikscube.devvm:8000 | 5186 (`packages/ui-2d`) |
+| http://rubikscube-3d.devvm:8000 | 5187 (`packages/ui-3d`) |
 | http://video-aggregator.devvm:8000 | 5200 |
 | http://portfolio.devvm:8000 | 8789 (`wrangler pages dev --port 8789`) |
 
-Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5187.
+Each port is set in the project's own repo, so the dev server always starts there. A name shows `502 Bad Gateway` until you start that project's dev server (`pnpm dev`). New ports go up from 5188.
 
 How it works:
 
