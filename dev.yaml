@@ -196,7 +196,7 @@ param:
   # (/graphify). The PyPI name has two y's; other graphify* packages there
   # are not the same project.
   # renovate: datasource=pypi depName=graphifyy
-  GRAPHIFY_VERSION: "0.9.114"
+  GRAPHIFY_VERSION: "0.9.120"
   # Hugo, for pauls-blog: FALLBACK ONLY. The version that counts is
   # HUGO_VERSION in pauls-blog's .github/workflows/hugo.yml, which Renovate
   # bumps there; the Hugo step installs that one, so the preview matches the
